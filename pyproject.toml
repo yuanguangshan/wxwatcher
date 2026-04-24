@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wxwatcher"
-version = "1.0.0"
+version = "1.0.1"
 description = "A file change monitor that pushes notifications via WeChat"
 readme = "README.md"
 license = "MIT"
