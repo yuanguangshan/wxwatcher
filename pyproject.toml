@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wxwatcher"
+version = "0.1.0"
+description = "A file change monitor that pushes notifications via WeChat"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+dependencies = ["httpx"]
+
+[project.scripts]
+wxwatcher = "wxwatcher.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
