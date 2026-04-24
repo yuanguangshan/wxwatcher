@@ -1,10 +1,11 @@
 """WeChat push notification with retry."""
+import logging
 import time
 
 import httpx
 
 
-def send_wechat(text: str, push_url: str, to_user: str, logger, max_retries: int = 3) -> bool:
+def send_wechat(text: str, push_url: str, to_user: str, logger: logging.Logger, max_retries: int = 3) -> bool:
     """通过推送接口发送文本消息，带指数退避重试"""
     for attempt in range(max_retries):
         try:

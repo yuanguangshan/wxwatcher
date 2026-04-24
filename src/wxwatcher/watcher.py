@@ -101,9 +101,6 @@ def detect_changes(old_state: dict, fast_state: dict, watch_dir: str) -> list[st
             new_hash = sha256_file(fpath)
             old_hash = old_state[fpath][2]
 
-            # 大文件标记：仅比较 mtime/size 变化
-            is_large = new_hash.startswith("LARGE:")
-
             if new_hash and old_hash == new_hash:
                 continue  # 假阳性，内容未变
 
