@@ -69,7 +69,7 @@ options:
 |---|---|---|
 | `WXWATCHER_DIR` | 监控目录 | 当前目录 |
 | `WXWATCHER_INTERVAL` | 轮询间隔（秒） | `30` |
-| `WXWATCHER_PUSH_URL` | 推送 API 地址 | `https://api.yuangs.cc/weixinpush` |
+| `WXWATCHER_PUSH_URL` | 推送 API 地址 | **必须配置** |
 | `WXWATCHER_TO_USER` | 接收人 | `@all` |
 | `WXWATCHER_MAX_BATCH` | 单批最大变更数 | `50` |
 | `WXWATCHER_LOG_FILE` | 日志文件路径 | `~/.wxwatcher/file_watcher.log` |
@@ -81,6 +81,7 @@ options:
 ```bash
 export WXWATCHER_DIR=/data
 export WXWATCHER_INTERVAL=10
+export WXWATCHER_PUSH_URL=https://api.example.com/push
 export WXWATCHER_IGNORE="node_modules,.idea"
 wxwatcher
 ```

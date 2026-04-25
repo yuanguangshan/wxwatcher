@@ -15,6 +15,46 @@ from .watcher import scan_directory, fast_scan, detect_changes, sha256_file, sav
 from .notifier import send_wechat
 
 
+def sync_state(old_state: dict, fast_state: dict, watch_dir: str) -> dict:
+    """
+    根据快速扫描结果更新完整状态（包含哈希值）。
+
+    Args:
+        old_state: 旧状态 {路径: (mtime, size, hash)}
+        fast_state: 快速扫描结果 {路径: (mtime, size)}
+        watch_dir: 监控目录根路径
+
+    Returns:
+        更新后的完整状态
+    """
+    new_state = {}
+    fast_keys = set(fast_state.keys())
+    old_keys = set(old_state.keys())
+
+    # 新增文件：计算哈希
+    for fpath in fast_keys - old_keys:
+        mtime, size = fast_state[fpath]
+        new_state[fpath] = (mtime, size, sha256_file(fpath))
+
+    # 删除文件：直接跳过
+    for fpath in old_keys - fast_keys:
+        continue
+
+    # 存在的文件：更新变化的哈希
+    for fpath in fast_keys & old_keys:
+        old_mtime, old_size, old_hash = old_state[fpath]
+        new_mtime, new_size = fast_state[fpath]
+
+        if old_mtime != new_mtime or old_size != new_size:
+            # 文件变化，重新计算哈希
+            new_state[fpath] = (new_mtime, new_size, sha256_file(fpath))
+        else:
+            # 未变化，保留旧哈希
+            new_state[fpath] = old_state[fpath]
+
+    return new_state
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wxwatcher",
@@ -32,18 +72,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def setup_logging(log_file: str) -> logging.Logger:
+    """
+    配置日志处理器（避免重复添加）。
+
+    Args:
+        log_file: 日志文件路径
+
+    Returns:
+        配置好的 Logger 实例
+    """
     log_dir = os.path.dirname(log_file)
     if log_dir:
         os.makedirs(log_dir, exist_ok=True)
+
     logger = logging.getLogger("wxwatcher")
     logger.setLevel(logging.INFO)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    file_handler = RotatingFileHandler(log_file, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
-    file_handler.setFormatter(fmt)
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(fmt)
-    logger.addHandler(file_handler)
-    logger.addHandler(stream_handler)
+
+    # 避免重复添加 handler
+    if not logger.handlers:
+        fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+        file_handler = RotatingFileHandler(log_file, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
+        file_handler.setFormatter(fmt)
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(fmt)
+        logger.addHandler(file_handler)
+        logger.addHandler(stream_handler)
+
     return logger
 
 
@@ -72,7 +126,21 @@ def format_change_msg(changes: list[str], now: str, batch_idx: int, total_batche
 def main():
     parser = build_parser()
     args = parser.parse_args()
-    cfg = load_config(args)
+
+    # 加载配置，捕获必填项缺失等验证错误
+    try:
+        cfg = load_config(args)
+    except ValueError as e:
+        print(f"配置错误: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # 参数校验
+    if cfg.poll_interval < 1:
+        print("配置错误: 轮询间隔不能小于 1 秒", file=sys.stderr)
+        sys.exit(1)
+    if cfg.max_batch < 1:
+        print("配置错误: 单批最大变更数不能小于 1", file=sys.stderr)
+        sys.exit(1)
 
     logger = setup_logging(cfg.log_file)
     watch_dir = cfg.watch_dir
@@ -110,20 +178,8 @@ def main():
 
                 if changes:
                     now = datetime.now().strftime("%H:%M:%S")
-                    # 同步状态（调用方负责）
-                    fast_keys = set(fast_state.keys())
-                    old_keys = set(state.keys())
-                    for fpath in fast_keys - old_keys:
-                        mtime, size = fast_state[fpath]
-                        state[fpath] = (mtime, size, sha256_file(fpath))
-                    for fpath in old_keys - fast_keys:
-                        del state[fpath]
-                    # 修改文件：更新哈希
-                    for fpath in fast_keys & old_keys:
-                        old_mtime, old_size, _ = state[fpath]
-                        new_mtime, new_size = fast_state[fpath]
-                        if old_mtime != new_mtime or old_size != new_size:
-                            state[fpath] = (new_mtime, new_size, sha256_file(fpath))
+                    # 同步状态（重新计算变化文件的哈希）
+                    state = sync_state(state, fast_state, watch_dir)
 
                     batches = [changes[i:i + cfg.max_batch] for i in range(0, len(changes), cfg.max_batch)]
                     for idx, batch in enumerate(batches):
