@@ -9,6 +9,15 @@ from typing import Dict, List, Set, Tuple
 STATE_FILE = os.path.expanduser("~/.wxwatcher/state.json")
 
 
+def _get_state_file(watch_dir: str = "") -> str:
+    """根据 watch_dir 生成独立的状态文件路径，避免多实例冲突。"""
+    if not watch_dir:
+        return STATE_FILE
+    dir_hash = hashlib.md5(watch_dir.encode("utf-8")).hexdigest()[:8]
+    base = os.path.expanduser("~/.wxwatcher")
+    return os.path.join(base, f"state_{dir_hash}.json")
+
+
 def sha256_file(path: str, max_size: int = 10 * 1024 * 1024) -> str:
     """
     计算文件内容 hash。
@@ -125,73 +134,89 @@ def detect_changes(
     old_state: Dict[str, Tuple[float, int, str]],
     fast_state: Dict[str, Tuple[float, int]],
     watch_dir: str
-) -> List[str]:
+) -> Tuple[List[str], Dict[str, Tuple[float, int, str]]]:
     """
-    两阶段变化检测（纯函数，不修改 old_state）：
+    两阶段变化检测 + 状态同步（一次哈希，两处使用）：
     1. 先用 mtime/size 快速判断疑似变化文件
     2. 仅对疑似文件计算 sha256，确认内容是否真正改变
+    3. 同时构建新状态，避免二次哈希
 
     处理特殊情况：
     - 大文件（LARGE: 前缀）：基于前 8KB 近似哈希判断
     - 空文件（EMPTY）：大小为 0 的文件
     - 读取错误（ERROR）：跳过哈希比较，仅依赖 mtime/size
+
+    返回:
+        (changes, new_state) - 变更描述列表和更新后的完整状态
     """
-    changes = []
+    changes: List[str] = []
+    new_state: Dict[str, Tuple[float, int, str]] = {}
     old_keys = set(old_state.keys())
     new_keys = set(fast_state.keys())
 
+    # 新增文件：计算哈希
     for fpath in sorted(new_keys - old_keys):
         _, size = fast_state[fpath]
+        file_hash = sha256_file(fpath)
+        new_state[fpath] = (fast_state[fpath][0], size, file_hash)
         rel = os.path.relpath(fpath, watch_dir)
         changes.append(f"[新增] {rel} ({fmt_size(size)})")
 
+    # 删除文件：直接跳过，不加入 new_state
     for fpath in sorted(old_keys - new_keys):
         rel = os.path.relpath(fpath, watch_dir)
         changes.append(f"[删除] {rel}")
 
+    # 已存在文件：检测变化并同步状态
     for fpath in old_keys & new_keys:
         old_mtime, old_size, old_hash = old_state[fpath]
         new_mtime, new_size = fast_state[fpath]
 
-        # 如果 mtime 和 size 都没变，直接跳过
+        # 如果 mtime 和 size 都没变，直接跳过（保留旧状态）
         if old_mtime == new_mtime and old_size == new_size:
+            new_state[fpath] = old_state[fpath]
             continue
 
         new_hash = sha256_file(fpath)
 
-        # 错误处理：如果哈希计算失败，跳过这个文件
+        # 错误处理：如果哈希计算失败，保留旧状态并跳过
         if new_hash == "ERROR" or old_hash == "ERROR":
             logger = logging.getLogger(__name__)
             logger.warning(f"无法计算哈希: {fpath}")
+            new_state[fpath] = old_state[fpath]
             continue
 
-        # 特殊值处理
+        # 内容未变（假阳性）
         if old_hash == new_hash:
-            continue  # 假阳性，内容未变
+            new_state[fpath] = old_state[fpath]
+            continue
 
-        # 对于大文件和空文件，如果部分哈希相同，也视为未变
-        # 只有当 mtime 确实变化时才报告变更
-        if old_mtime != new_mtime:
-            rel = os.path.relpath(fpath, watch_dir)
-            diff = fmt_size_diff(new_size - old_size)
-            changes.append(f"[修改] {rel} ({diff})")
+        # 内容真正变化
+        rel = os.path.relpath(fpath, watch_dir)
+        diff = fmt_size_diff(new_size - old_size)
+        changes.append(f"[修改] {rel} ({diff})")
+        new_state[fpath] = (new_mtime, new_size, new_hash)
 
-    return changes
+    return changes, new_state
 
 
 def save_state(state: Dict[str, Tuple[float, int, str]], watch_dir: str) -> None:
-    """将状态持久化到文件"""
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    """将状态持久化到文件（原子写入）。"""
+    state_file = _get_state_file(watch_dir)
+    os.makedirs(os.path.dirname(state_file), exist_ok=True)
     serializable = {k: list(v) for k, v in state.items()}
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
+    tmp_path = state_file + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump({"watch_dir": watch_dir, "files": serializable}, f)
+    os.replace(tmp_path, state_file)
 
 
-def load_state() -> Tuple[Dict[str, Tuple[float, int, str]], str | None]:
-    """从文件加载状态，返回 (state_dict, watch_dir)"""
-    if os.path.exists(STATE_FILE):
+def load_state(watch_dir: str = "") -> Tuple[Dict[str, Tuple[float, int, str]], str | None]:
+    """从文件加载状态，返回 (state_dict, watch_dir)。"""
+    state_file = _get_state_file(watch_dir)
+    if os.path.exists(state_file):
         try:
-            with open(STATE_FILE, encoding="utf-8") as f:
+            with open(state_file, encoding="utf-8") as f:
                 data = json.load(f)
             return {k: tuple(v) for k, v in data["files"].items()}, data.get("watch_dir")
         except (OSError, json.JSONDecodeError, KeyError):

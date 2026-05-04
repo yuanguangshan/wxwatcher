@@ -70,7 +70,7 @@ class TestSha256File:
         assert result.startswith("LARGE:")
 
     def test_nonexistent_file(self):
-        assert sha256_file("/nonexistent/path") == ""
+        assert sha256_file("/nonexistent/path") == "ERROR"
 
 
 class TestDetectChanges:
@@ -86,29 +86,35 @@ class TestDetectChanges:
     def test_new_file(self):
         old = {}
         fast = {"/tmp/new.txt": (2000.0, 50)}
-        changes = detect_changes(old, fast, "/tmp")
+        changes, new_state = detect_changes(old, fast, "/tmp")
         assert len(changes) == 1
         assert "[新增]" in changes[0]
+        assert "/tmp/new.txt" in new_state
 
     def test_deleted_file(self):
         old = {"/tmp/old.txt": (1000.0, 50, "abc")}
         fast = {}
-        changes = detect_changes(old, fast, "/tmp")
+        changes, new_state = detect_changes(old, fast, "/tmp")
         assert len(changes) == 1
         assert "[删除]" in changes[0]
+        assert "/tmp/old.txt" not in new_state
 
     def test_modified_file(self):
-        old = {"/tmp/f.txt": (1000.0, 100, "old_hash")}
-        fast = {"/tmp/f.txt": (2000.0, 200)}
-        # sha256_file will return "" for non-existent file, so it'll be detected as changed
-        changes = detect_changes(old, fast, "/tmp")
-        assert len(changes) == 1
-        assert "[修改]" in changes[0]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fpath = os.path.join(tmpdir, "f.txt")
+            with open(fpath, "w") as f:
+                f.write("original")
+            old = {fpath: (1000.0, 100, "old_hash")}
+            fast = {fpath: (2000.0, 200)}
+            changes, new_state = detect_changes(old, fast, tmpdir)
+            assert len(changes) == 1
+            assert "[修改]" in changes[0]
+            assert fpath in new_state
 
     def test_no_change_same_mtime_size(self):
         old = {"/tmp/f.txt": (1000.0, 100, "abc")}
         fast = {"/tmp/f.txt": (1000.0, 100)}
-        changes = detect_changes(old, fast, "/tmp")
+        changes, new_state = detect_changes(old, fast, "/tmp")
         assert len(changes) == 0
 
     def test_does_not_mutate_old_state(self):
@@ -131,13 +137,9 @@ class TestDetectChanges:
             time.sleep(0.1)
 
             fs = fast_scan(tmpdir, {".git"}, {".pyc"}, set())
-            changes = detect_changes(state, fs, tmpdir)
+            changes, state = detect_changes(state, fs, tmpdir)
             assert len(changes) == 1
             assert "[新增]" in changes[0]
-
-            # sync state manually
-            mtime, size = fs[f1]
-            state[f1] = (mtime, size, sha256_file(f1))
 
             # modify the file
             time.sleep(0.1)
@@ -146,14 +148,14 @@ class TestDetectChanges:
             time.sleep(0.1)
 
             fs2 = fast_scan(tmpdir, {".git"}, {".pyc"}, set())
-            changes2 = detect_changes(state, fs2, tmpdir)
+            changes2, state = detect_changes(state, fs2, tmpdir)
             assert len(changes2) == 1
             assert "[修改]" in changes2[0]
 
             # delete the file
             os.unlink(f1)
             fs3 = fast_scan(tmpdir, {".git"}, {".pyc"}, set())
-            changes3 = detect_changes(state, fs3, tmpdir)
+            changes3, state = detect_changes(state, fs3, tmpdir)
             assert len(changes3) == 1
             assert "[删除]" in changes3[0]
 
@@ -213,27 +215,27 @@ class TestScanDirectory:
 
 class TestStatePersistence:
     def _patch_state_file(self, tmpdir):
-        """Redirect STATE_FILE to a temp directory for test isolation."""
+        """Redirect state file to a temp directory for test isolation."""
         import wxwatcher.watcher as wmod
         state_path = os.path.join(tmpdir, "state.json")
-        original = wmod.STATE_FILE
-        wmod.STATE_FILE = state_path
-        return original, state_path
+        original_get = wmod._get_state_file
+        wmod._get_state_file = lambda watch_dir="": state_path
+        return original_get
 
-    def _restore_state_file(self, original):
+    def _restore_state_file(self, original_get):
         import wxwatcher.watcher as wmod
-        wmod.STATE_FILE = original
+        wmod._get_state_file = original_get
 
     def test_save_load_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            original, _ = self._patch_state_file(tmpdir)
+            original = self._patch_state_file(tmpdir)
             try:
                 state = {
                     os.path.join(tmpdir, "a.txt"): (1000.0, 100, "abc123"),
                     os.path.join(tmpdir, "b.py"): (2000.0, 200, "def456"),
                 }
                 save_state(state, tmpdir)
-                loaded, loaded_dir = load_state()
+                loaded, loaded_dir = load_state(tmpdir)
                 assert loaded_dir == tmpdir
                 assert loaded == {k: tuple(v) for k, v in state.items()}
             finally:
@@ -241,9 +243,9 @@ class TestStatePersistence:
 
     def test_load_missing_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            original, _ = self._patch_state_file(tmpdir)
+            original = self._patch_state_file(tmpdir)
             try:
-                state, watch_dir = load_state()
+                state, watch_dir = load_state(tmpdir)
                 assert state == {}
                 assert watch_dir is None
             finally:
@@ -251,11 +253,12 @@ class TestStatePersistence:
 
     def test_load_corrupt_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            original, state_path = self._patch_state_file(tmpdir)
+            original = self._patch_state_file(tmpdir)
             try:
+                state_path = os.path.join(tmpdir, "state.json")
                 with open(state_path, "w") as f:
                     f.write("not json")
-                state, watch_dir = load_state()
+                state, watch_dir = load_state(tmpdir)
                 assert state == {}
                 assert watch_dir is None
             finally:
@@ -263,12 +266,20 @@ class TestStatePersistence:
 
     def test_persisted_state_matches_watch_dir(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            original, _ = self._patch_state_file(tmpdir)
+            original = self._patch_state_file(tmpdir)
             try:
                 state = {"/some/file": (1.0, 2, "hash")}
                 save_state(state, "/original/dir")
-                loaded, loaded_dir = load_state()
+                loaded, loaded_dir = load_state("/original/dir")
                 assert loaded_dir == "/original/dir"
                 assert loaded != {}
             finally:
                 self._restore_state_file(original)
+
+    def test_multi_instance_isolation(self):
+        import wxwatcher.watcher as wmod
+        file1 = wmod._get_state_file("/tmp/dir_a")
+        file2 = wmod._get_state_file("/tmp/dir_b")
+        assert file1 != file2  # different paths for different dirs
+        assert file1.endswith(".json")
+        assert file2.endswith(".json")

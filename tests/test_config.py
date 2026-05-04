@@ -7,8 +7,8 @@ from wxwatcher.config import load_config, AppConfig
 
 
 def _make_args(**overrides):
-    defaults = dict(dir=None, push_url=None, to_user=None, interval=None,
-                    max_batch=None, log_file=None, ext=None)
+    defaults = dict(dir=None, push_url="http://example.com/push", to_user=None, interval=None,
+                    max_batch=None, log_file=None, ext=None, ignore=None)
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
 
@@ -58,3 +58,14 @@ class TestLoadConfig:
     def test_watch_dir_defaults_to_cwd(self):
         cfg = load_config(_make_args())
         assert cfg.watch_dir == os.path.abspath(os.getcwd())
+
+    def test_ignore_cli_arg(self):
+        cfg = load_config(_make_args(ignore="dist,build"))
+        assert "dist" in cfg.ignore_patterns
+        assert "build" in cfg.ignore_patterns
+
+    def test_ignore_cli_merges_with_env(self):
+        with mock.patch.dict(os.environ, {"WXWATCHER_IGNORE": "vendor"}):
+            cfg = load_config(_make_args(ignore="dist"))
+            assert "vendor" in cfg.ignore_patterns
+            assert "dist" in cfg.ignore_patterns

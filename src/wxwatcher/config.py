@@ -86,9 +86,15 @@ def load_config(args) -> AppConfig:
     if max_batch is None:
         max_batch = int(os.environ.get("WXWATCHER_MAX_BATCH", DEFAULT_MAX_BATCH))
 
-    # 忽略规则：环境变量为逗号分隔列表
-    ignore_str = os.environ.get("WXWATCHER_IGNORE", "")
-    ignore_patterns = IGNORE_PATTERNS | {s.strip() for s in ignore_str.split(",") if s.strip()}
+    # 忽略规则：环境变量 + CLI 参数
+    ignore_source = ""
+    if hasattr(args, "ignore") and args.ignore:
+        ignore_source = args.ignore
+    ignore_env = os.environ.get("WXWATCHER_IGNORE", "")
+    ignore_parts = [s.strip() for s in ignore_env.split(",") if s.strip()]
+    if ignore_source:
+        ignore_parts.extend(s.strip() for s in ignore_source.split(",") if s.strip())
+    ignore_patterns = IGNORE_PATTERNS | set(ignore_parts)
 
     # CLI --ext 参数 + 环境变量
     ext_source = args.ext if hasattr(args, "ext") and args.ext else os.environ.get("WXWATCHER_EXT", "")

@@ -6,53 +6,12 @@ import sys
 import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
-
-import httpx
+from urllib.parse import urlparse
 
 from . import __version__
 from .config import load_config
-from .watcher import scan_directory, fast_scan, detect_changes, sha256_file, save_state, load_state
+from .watcher import scan_directory, fast_scan, detect_changes, save_state, load_state
 from .notifier import send_wechat
-
-
-def sync_state(old_state: dict, fast_state: dict, watch_dir: str) -> dict:
-    """
-    根据快速扫描结果更新完整状态（包含哈希值）。
-
-    Args:
-        old_state: 旧状态 {路径: (mtime, size, hash)}
-        fast_state: 快速扫描结果 {路径: (mtime, size)}
-        watch_dir: 监控目录根路径
-
-    Returns:
-        更新后的完整状态
-    """
-    new_state = {}
-    fast_keys = set(fast_state.keys())
-    old_keys = set(old_state.keys())
-
-    # 新增文件：计算哈希
-    for fpath in fast_keys - old_keys:
-        mtime, size = fast_state[fpath]
-        new_state[fpath] = (mtime, size, sha256_file(fpath))
-
-    # 删除文件：直接跳过
-    for fpath in old_keys - fast_keys:
-        continue
-
-    # 存在的文件：更新变化的哈希
-    for fpath in fast_keys & old_keys:
-        old_mtime, old_size, old_hash = old_state[fpath]
-        new_mtime, new_size = fast_state[fpath]
-
-        if old_mtime != new_mtime or old_size != new_size:
-            # 文件变化，重新计算哈希
-            new_state[fpath] = (new_mtime, new_size, sha256_file(fpath))
-        else:
-            # 未变化，保留旧哈希
-            new_state[fpath] = old_state[fpath]
-
-    return new_state
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,16 +26,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--to-user", default=None, help="接收人（默认 @all）")
     parser.add_argument("--max-batch", type=int, default=None, help=f"单批最大变更数（默认 50）")
     parser.add_argument("--ext", default=None, help="仅监控指定扩展名（逗号分隔，如 py,md）")
+    parser.add_argument("--ignore", default=None, help="忽略的目录/文件名（逗号分隔，如 dist,build）")
     parser.add_argument("--log-file", default=None, help="日志文件路径")
+    parser.add_argument("--verbose", action="store_true", help="输出 DEBUG 级别日志")
+    parser.add_argument("--quiet", action="store_true", help="仅输出 WARNING 及以上")
     return parser
 
 
-def setup_logging(log_file: str) -> logging.Logger:
+def setup_logging(log_file: str, level: int = logging.INFO) -> logging.Logger:
     """
     配置日志处理器（避免重复添加）。
 
     Args:
         log_file: 日志文件路径
+        level: 日志级别
 
     Returns:
         配置好的 Logger 实例
@@ -86,25 +49,35 @@ def setup_logging(log_file: str) -> logging.Logger:
         os.makedirs(log_dir, exist_ok=True)
 
     logger = logging.getLogger("wxwatcher")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(level)
 
     # 避免重复添加 handler
     if not logger.handlers:
         fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
         file_handler = RotatingFileHandler(log_file, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
         file_handler.setFormatter(fmt)
+        file_handler.setLevel(level)
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(fmt)
+        stream_handler.setLevel(level)
         logger.addHandler(file_handler)
         logger.addHandler(stream_handler)
 
     return logger
 
 
+def mask_url(url: str) -> str:
+    """脱敏 URL，隐藏 query 参数中的 token/secret。"""
+    parsed = urlparse(url)
+    if parsed.query:
+        parsed = parsed._replace(query="<hidden>")
+    return parsed.geturl()
+
+
 def format_startup_msg(watch_dir: str, file_count: int) -> str:
     now = datetime.now().strftime("%H:%M:%S")
     return (
-        f"📂 文件监控已启动\n"
+        f"文件监控已启动\n"
         f"{'─' * 10}\n"
         f"监控目录: {os.path.basename(watch_dir)}\n"
         f"文件数量: {file_count}\n"
@@ -115,7 +88,7 @@ def format_startup_msg(watch_dir: str, file_count: int) -> str:
 
 
 def format_change_msg(changes: list[str], now: str, batch_idx: int, total_batches: int, total_changes: int) -> str:
-    header = f"📝 文件变更  {now}"
+    header = f"文件变更  {now}"
     text = header + "\n" + f"{'─' * 10}\n" + "\n".join(f"{i + 1}. {c}" for i, c in enumerate(changes))
     if total_batches > 1:
         text += f"\n{'─' * 10}\n共检测到 {total_changes} 项变更（第 {batch_idx + 1}/{total_batches} 批）"
@@ -142,7 +115,15 @@ def main():
         print("配置错误: 单批最大变更数不能小于 1", file=sys.stderr)
         sys.exit(1)
 
-    logger = setup_logging(cfg.log_file)
+    # 日志级别
+    if args.verbose:
+        log_level = logging.DEBUG
+    elif args.quiet:
+        log_level = logging.WARNING
+    else:
+        log_level = logging.INFO
+
+    logger = setup_logging(cfg.log_file, log_level)
     watch_dir = cfg.watch_dir
 
     if not os.path.isdir(watch_dir):
@@ -151,10 +132,12 @@ def main():
 
     logger.info(f"监控目录: {watch_dir}")
     logger.info(f"轮询间隔: {cfg.poll_interval}秒")
-    logger.info(f"推送地址: {cfg.push_url}")
+    logger.info(f"推送地址: {mask_url(cfg.push_url)}")
 
-    # 尝试加载持久化状态
-    saved_state, saved_dir = load_state()
+    # 尝试加载持久化状态（先按 watch_dir 查找，再回退到旧默认文件）
+    saved_state, saved_dir = load_state(watch_dir)
+    if not saved_state:
+        saved_state, saved_dir = load_state()  # 兼容旧版 state.json
     if saved_dir == watch_dir and saved_state:
         state = saved_state
         logger.info(f"已加载持久化状态，共 {len(state)} 个文件")
@@ -174,13 +157,10 @@ def main():
             try:
                 time.sleep(cfg.poll_interval)
                 fast_state = fast_scan(watch_dir, cfg.ignore_patterns, cfg.ignore_exts, cfg.monitor_exts)
-                changes = detect_changes(state, fast_state, watch_dir)
+                changes, state = detect_changes(state, fast_state, watch_dir)
 
                 if changes:
                     now = datetime.now().strftime("%H:%M:%S")
-                    # 同步状态（重新计算变化文件的哈希）
-                    state = sync_state(state, fast_state, watch_dir)
-
                     batches = [changes[i:i + cfg.max_batch] for i in range(0, len(changes), cfg.max_batch)]
                     for idx, batch in enumerate(batches):
                         text = format_change_msg(batch, now, idx, len(batches), len(changes))
@@ -194,7 +174,7 @@ def main():
                         logger.info("无变更")
                         last_heartbeat = time.time()
 
-            except (OSError, httpx.HTTPError) as e:
+            except (OSError, IOError) as e:
                 logger.error(f"可恢复异常: {e}")
                 time.sleep(cfg.poll_interval)
     except KeyboardInterrupt:
