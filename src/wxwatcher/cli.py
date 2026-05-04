@@ -1,4 +1,6 @@
 """CLI entry point for wxwatcher."""
+from __future__ import annotations
+
 import argparse
 import logging
 import os

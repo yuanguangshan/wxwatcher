@@ -41,7 +41,8 @@ wxwatcher /path/to/watch
 $ wxwatcher --help
 usage: wxwatcher [-h] [-v] [-i INTERVAL] [--push-url PUSH_URL]
                  [--to-user TO_USER] [--max-batch MAX_BATCH]
-                 [--log-file LOG_FILE]
+                 [--ext EXT] [--ignore IGNORE] [--log-file LOG_FILE]
+                 [--verbose] [--quiet]
                  [dir]
 
 文件变更监控工具，检测到变化时通过微信推送通知
@@ -58,7 +59,11 @@ options:
   --to-user TO_USER     接收人（默认 @all）
   --max-batch MAX_BATCH
                         单批最大变更数（默认 50）
+  --ext EXT             仅监控指定扩展名（逗号分隔，如 py,md）
+  --ignore IGNORE       忽略的目录/文件名（逗号分隔，如 dist,build）
   --log-file LOG_FILE   日志文件路径
+  --verbose             输出 DEBUG 级别日志
+  --quiet               仅输出 WARNING 及以上
 ```
 
 ## 配置
@@ -75,6 +80,14 @@ options:
 | `WXWATCHER_LOG_FILE` | 日志文件路径 | `~/.wxwatcher/file_watcher.log` |
 | `WXWATCHER_IGNORE` | 额外忽略模式（逗号分隔） | 无 |
 | `WXWATCHER_EXT` | 仅监控扩展名（逗号分隔） | 全部 |
+
+也可通过 CLI 参数控制（优先级高于环境变量）：
+
+| 参数 | 说明 |
+|---|---|
+| `--ignore` | 忽略的目录/文件名（逗号分隔，如 `dist,build`） |
+| `--verbose` | 输出 DEBUG 级别日志 |
+| `--quiet` | 仅输出 WARNING 及以上 |
 
 ### 示例
 
@@ -112,7 +125,7 @@ wxwatcher
 ## 推送消息示例
 
 ```
-📂 文件监控已启动
+文件监控已启动
 ──────────
 监控目录: project
 文件数量: 1203
@@ -122,7 +135,7 @@ By: 苑广山的文件监控助手
 ```
 
 ```
-📝 文件变更  02:35:00
+文件变更  02:35:00
 ──────────
 1. [新增] config.py (+2.1KB)
 2. [修改] README.md (+120B)
