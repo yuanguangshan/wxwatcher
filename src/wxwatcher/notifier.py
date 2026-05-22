@@ -45,3 +45,43 @@ def send_wechat(
 
     logger.error(f"推送最终失败，丢弃消息: {text[:50]}...")
     return False
+
+
+def upload_to_knowly(
+    file_path: str,
+    upload_url: str,
+    logger: logging.Logger,
+    max_retries: int = 3
+) -> str | None:
+    """
+    上传文件到 Knowly 服务器，带指数退避重试。
+
+    Args:
+        file_path: 本地文件路径
+        upload_url: Knowly 上传 API 地址
+        logger: 日志记录器
+        max_retries: 最大重试次数，默认 3
+
+    Returns:
+        上传成功返回远程路径，失败返回 None
+    """
+    for attempt in range(max_retries):
+        try:
+            with open(file_path, "rb") as f:
+                resp = httpx.post(
+                    upload_url,
+                    files={"file": f},
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if "path" in data:
+                    return data["path"]
+                logger.warning(f"Knowly 上传返回格式异常: {data}")
+        except Exception as e:
+            logger.warning(f"Knowly 上传异常 (尝试 {attempt + 1}/{max_retries}): {e}")
+
+        if attempt < max_retries - 1:
+            time.sleep(2 ** attempt)
+
+    return None

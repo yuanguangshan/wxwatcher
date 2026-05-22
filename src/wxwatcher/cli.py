@@ -11,9 +11,9 @@ from logging.handlers import RotatingFileHandler
 from urllib.parse import urlparse
 
 from . import __version__
-from .config import load_config
+from .config import load_config, UPLOAD_EXTS
 from .watcher import scan_directory, fast_scan, detect_changes, save_state, load_state
-from .notifier import send_wechat
+from .notifier import send_wechat, upload_to_knowly
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,6 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-file", default=None, help="日志文件路径")
     parser.add_argument("--verbose", action="store_true", help="输出 DEBUG 级别日志")
     parser.add_argument("--quiet", action="store_true", help="仅输出 WARNING 及以上")
+    parser.add_argument("--knowly-url", default=None, help="Knowly 上传 API 地址（需显式配置，默认不上传）")
+    parser.add_argument("--no-knowly", action="store_true", help="禁用上传到 Knowly")
     return parser
 
 
@@ -89,11 +91,21 @@ def format_startup_msg(watch_dir: str, file_count: int) -> str:
     )
 
 
-def format_change_msg(changes: list[str], now: str, batch_idx: int, total_batches: int, total_changes: int) -> str:
+def format_change_msg(
+    changes: list[str],
+    now: str,
+    batch_idx: int,
+    total_batches: int,
+    total_changes: int,
+    knowly_paths: list[tuple[str, str]] | None = None
+) -> str:
     header = f"文件变更  {now}"
     text = header + "\n" + f"{'─' * 10}\n" + "\n".join(f"{i + 1}. {c}" for i, c in enumerate(changes))
     if total_batches > 1:
         text += f"\n{'─' * 10}\n共检测到 {total_changes} 项变更（第 {batch_idx + 1}/{total_batches} 批）"
+    if knowly_paths:
+        uploaded = "\n".join(f"  [{src} -> {dst}]" for src, dst in knowly_paths)
+        text += f"\n{'─' * 10}\n已上传到 Knowly:\n{uploaded}"
     text += f"\n{'─' * 10}\nBy: 苑广山的文件监控助手"
     return text
 
@@ -135,6 +147,8 @@ def main():
     logger.info(f"监控目录: {watch_dir}")
     logger.info(f"轮询间隔: {cfg.poll_interval}秒")
     logger.info(f"推送地址: {mask_url(cfg.push_url)}")
+    if cfg.knowly_upload_url:
+        logger.info(f"Knowly 上传: {cfg.knowly_upload_url}")
 
     # 尝试加载持久化状态（先按 watch_dir 查找，再回退到旧默认文件）
     saved_state, saved_dir = load_state(watch_dir)
@@ -159,13 +173,25 @@ def main():
             try:
                 time.sleep(cfg.poll_interval)
                 fast_state = fast_scan(watch_dir, cfg.ignore_patterns, cfg.ignore_exts, cfg.monitor_exts)
-                changes, state = detect_changes(state, fast_state, watch_dir)
+                changes, changed_files, state = detect_changes(state, fast_state, watch_dir)
 
                 if changes:
+                    # 上传可支持的文件到 Knowly
+                    knowly_paths = []
+                    if cfg.knowly_upload_url:
+                        for fpath in changed_files:
+                            ext = os.path.splitext(fpath)[1].lower()
+                            if ext in UPLOAD_EXTS:
+                                uploaded_path = upload_to_knowly(fpath, cfg.knowly_upload_url, logger)
+                                if uploaded_path:
+                                    knowly_paths.append((os.path.relpath(fpath, watch_dir), uploaded_path))
+                                else:
+                                    logger.warning(f"Knowly 上传失败: {fpath}")
+
                     now = datetime.now().strftime("%H:%M:%S")
                     batches = [changes[i:i + cfg.max_batch] for i in range(0, len(changes), cfg.max_batch)]
                     for idx, batch in enumerate(batches):
-                        text = format_change_msg(batch, now, idx, len(batches), len(changes))
+                        text = format_change_msg(batch, now, idx, len(batches), len(changes), knowly_paths)
                         ok = send_wechat(text, cfg.push_url, cfg.to_user, logger)
                         logger.info(f"{'[OK]' if ok else '[FAIL]'} 推送变更批次 {idx + 1}，共 {len(batch)} 项")
 

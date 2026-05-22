@@ -148,9 +148,10 @@ def detect_changes(
     - 读取错误（ERROR）：跳过哈希比较，仅依赖 mtime/size
 
     返回:
-        (changes, new_state) - 变更描述列表和更新后的完整状态
+        (changes, changed_files, new_state) - 变更描述列表、变更文件的绝对路径列表、更新后的完整状态
     """
     changes: List[str] = []
+    changed_files: List[str] = []  # 绝对路径，用于上传
     new_state: Dict[str, Tuple[float, int, str]] = {}
     old_keys = set(old_state.keys())
     new_keys = set(fast_state.keys())
@@ -162,6 +163,7 @@ def detect_changes(
         new_state[fpath] = (fast_state[fpath][0], size, file_hash)
         rel = os.path.relpath(fpath, watch_dir)
         changes.append(f"[新增] {rel} ({fmt_size(size)})")
+        changed_files.append(fpath)
 
     # 删除文件：直接跳过，不加入 new_state
     for fpath in sorted(old_keys - new_keys):
@@ -196,9 +198,10 @@ def detect_changes(
         rel = os.path.relpath(fpath, watch_dir)
         diff = fmt_size_diff(new_size - old_size)
         changes.append(f"[修改] {rel} ({diff})")
+        changed_files.append(fpath)
         new_state[fpath] = (new_mtime, new_size, new_hash)
 
-    return changes, new_state
+    return changes, changed_files, new_state
 
 
 def save_state(state: Dict[str, Tuple[float, int, str]], watch_dir: str) -> None:

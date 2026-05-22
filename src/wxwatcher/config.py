@@ -8,6 +8,12 @@ DEFAULT_POLL_INTERVAL = 30
 DEFAULT_MAX_BATCH = 50
 DEFAULT_TO_USER = "@all"
 
+# 支持上传到 Knowly 的文件扩展名
+UPLOAD_EXTS: Set[str] = {
+    ".pdf", ".txt", ".md",
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg",
+}
+
 IGNORE_PATTERNS: Set[str] = {
     ".git", "__pycache__", ".venv", "node_modules", ".cache",
     ".DS_Store",
@@ -46,6 +52,9 @@ class AppConfig:
 
     log_file: str = ""
     """日志文件路径"""
+
+    knowly_upload_url: str = ""
+    """Knowly 上传 API 地址（空表示不上传）"""
 
 
 def load_config(args) -> AppConfig:
@@ -109,6 +118,15 @@ def load_config(args) -> AppConfig:
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, "file_watcher.log")
 
+    # Knowly 上传地址（默认不启用，显式配置才生效）
+    knowly_url = ""
+    if hasattr(args, "no-knowly") and args.no-knowly:
+        knowly_url = ""
+    elif args.knowly is not None:
+        knowly_url = args.knowly
+    else:
+        knowly_url = os.environ.get("WXWATCHER_KNOWLY_URL", "")
+
     return AppConfig(
         watch_dir=os.path.abspath(watch_dir),
         poll_interval=interval,
@@ -119,4 +137,5 @@ def load_config(args) -> AppConfig:
         ignore_exts=IGNORE_EXTS.copy(),
         monitor_exts=monitor_exts,
         log_file=log_file,
+        knowly_upload_url=knowly_url,
     )
