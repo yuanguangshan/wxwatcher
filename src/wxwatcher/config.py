@@ -122,8 +122,8 @@ def load_config(args) -> AppConfig:
     knowly_url = ""
     if hasattr(args, "no-knowly") and args.no-knowly:
         knowly_url = ""
-    elif args.knowly is not None:
-        knowly_url = args.knowly
+    elif args.knowly_url is not None:
+        knowly_url = args.knowly_url
     else:
         knowly_url = os.environ.get("WXWATCHER_KNOWLY_URL", "")
 
