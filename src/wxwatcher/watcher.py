@@ -70,6 +70,10 @@ def should_ignore(
         if name == pattern or pattern in parts:
             return True
 
+    # 模糊匹配：忽略以 .sidecar.md 结尾的文件（如 xxx.sidecar.md）
+    if name.endswith(".sidecar.md"):
+        return True
+
     ext = os.path.splitext(name)[1].lower()
     if ext in ignore_exts:
         return True
