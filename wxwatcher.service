@@ -1,0 +1,24 @@
+[Unit]
+Description=wxwatcher - File Change Monitor with WeChat Notifications
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env wxwatcher
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.wxwatcher
+
+# Environment file (optional)
+EnvironmentFile=-/etc/wxwatcher/environment
+
+[Install]
+WantedBy=multi-user.target

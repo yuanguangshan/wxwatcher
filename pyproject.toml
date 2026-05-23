@@ -22,6 +22,8 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+config = ["pyyaml>=6.0"]
+all = ["wxwatcher[config]"]
 
 [project.scripts]
 wxwatcher = "wxwatcher.cli:main"

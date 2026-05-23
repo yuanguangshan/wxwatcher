@@ -31,6 +31,64 @@ class TestShouldIgnore:
         assert should_ignore("test.md", "/proj/test.md", set(), set(), {".py"}) is True
         assert should_ignore("test.py", "/proj/test.py", set(), set(), {".py"}) is False
 
+    # --- Glob pattern tests ---
+    def test_glob_star_pattern(self):
+        """*.log matches debug.log but not debug.txt"""
+        patterns = {"*.log"}
+        assert should_ignore("debug.log", "/proj/debug.log", patterns, set(), set()) is True
+        assert should_ignore("debug.txt", "/proj/debug.txt", patterns, set(), set()) is False
+
+    def test_glob_tilde_pattern(self):
+        """~* matches ~temp"""
+        patterns = {"~*"}
+        assert should_ignore("~temp", "/proj/~temp", patterns, set(), set()) is True
+        assert should_ignore("temp", "/proj/temp", patterns, set(), set()) is False
+
+    def test_glob_no_match(self):
+        """*.log does not match debug.txt"""
+        patterns = {"*.log"}
+        assert should_ignore("debug.txt", "/proj/debug.txt", patterns, set(), set()) is False
+
+    def test_glob_question_mark(self):
+        """file.? matches file.a but not file.ab"""
+        patterns = {"file.?"}
+        assert should_ignore("file.a", "/proj/file.a", patterns, set(), set()) is True
+        assert should_ignore("file.ab", "/proj/file.ab", patterns, set(), set()) is False
+
+    # --- Regex pattern tests ---
+    def test_regex_pattern_match(self):
+        r"""regex:\.tmp\d+$ matches file.tmp123"""
+        patterns = {r"regex:\.tmp\d+$"}
+        assert should_ignore("file.tmp123", "/proj/file.tmp123", patterns, set(), set()) is True
+
+    def test_regex_pattern_no_match(self):
+        r"""regex:\.tmp\d+$ does not match file.tmp"""
+        patterns = {r"regex:\.tmp\d+$"}
+        assert should_ignore("file.tmp", "/proj/file.tmp", patterns, set(), set()) is False
+
+    def test_regex_pattern_in_path(self):
+        """regex pattern can match against full path"""
+        patterns = {r"regex:backup_\d{4}"}
+        assert should_ignore("data.txt", "/proj/backup_2024/data.txt", patterns, set(), set()) is True
+
+    # --- Backward compatibility ---
+    def test_plain_string_backward_compat(self):
+        """Existing .git pattern still works exactly"""
+        patterns = {".git"}
+        assert should_ignore(".git", "/proj/.git", patterns, set(), set()) is True
+        assert should_ignore(".github", "/proj/.github", patterns, set(), set()) is False
+
+    def test_sidecar_still_ignored(self):
+        """.sidecar.md pattern still works (hardcoded)"""
+        assert should_ignore("foo.sidecar.md", "/proj/foo.sidecar.md", set(), set(), set()) is True
+        assert should_ignore("bar.sidecar.md", "/proj/bar.sidecar.md", set(), set(), set()) is True
+
+    def test_regex_cache(self):
+        """Same regex pattern is cached (call twice to verify no error)"""
+        patterns = {r"regex:\.log$"}
+        assert should_ignore("test.log", "/proj/test.log", patterns, set(), set()) is True
+        assert should_ignore("app.log", "/proj/app.log", patterns, set(), set()) is True
+
 
 class TestFmtSize:
     def test_bytes(self):
@@ -86,7 +144,7 @@ class TestDetectChanges:
     def test_new_file(self):
         old = {}
         fast = {"/tmp/new.txt": (2000.0, 50)}
-        changes, new_state = detect_changes(old, fast, "/tmp")
+        changes, changed_files, new_state = detect_changes(old, fast, "/tmp")
         assert len(changes) == 1
         assert "[新增]" in changes[0]
         assert "/tmp/new.txt" in new_state
@@ -94,7 +152,7 @@ class TestDetectChanges:
     def test_deleted_file(self):
         old = {"/tmp/old.txt": (1000.0, 50, "abc")}
         fast = {}
-        changes, new_state = detect_changes(old, fast, "/tmp")
+        changes, changed_files, new_state = detect_changes(old, fast, "/tmp")
         assert len(changes) == 1
         assert "[删除]" in changes[0]
         assert "/tmp/old.txt" not in new_state
@@ -106,7 +164,7 @@ class TestDetectChanges:
                 f.write("original")
             old = {fpath: (1000.0, 100, "old_hash")}
             fast = {fpath: (2000.0, 200)}
-            changes, new_state = detect_changes(old, fast, tmpdir)
+            changes, changed_files, new_state = detect_changes(old, fast, tmpdir)
             assert len(changes) == 1
             assert "[修改]" in changes[0]
             assert fpath in new_state
@@ -114,7 +172,7 @@ class TestDetectChanges:
     def test_no_change_same_mtime_size(self):
         old = {"/tmp/f.txt": (1000.0, 100, "abc")}
         fast = {"/tmp/f.txt": (1000.0, 100)}
-        changes, new_state = detect_changes(old, fast, "/tmp")
+        changes, changed_files, new_state = detect_changes(old, fast, "/tmp")
         assert len(changes) == 0
 
     def test_does_not_mutate_old_state(self):
@@ -137,7 +195,7 @@ class TestDetectChanges:
             time.sleep(0.1)
 
             fs = fast_scan(tmpdir, {".git"}, {".pyc"}, set())
-            changes, state = detect_changes(state, fs, tmpdir)
+            changes, changed_files, state = detect_changes(state, fs, tmpdir)
             assert len(changes) == 1
             assert "[新增]" in changes[0]
 
@@ -148,14 +206,14 @@ class TestDetectChanges:
             time.sleep(0.1)
 
             fs2 = fast_scan(tmpdir, {".git"}, {".pyc"}, set())
-            changes2, state = detect_changes(state, fs2, tmpdir)
+            changes2, changed_files2, state = detect_changes(state, fs2, tmpdir)
             assert len(changes2) == 1
             assert "[修改]" in changes2[0]
 
             # delete the file
             os.unlink(f1)
             fs3 = fast_scan(tmpdir, {".git"}, {".pyc"}, set())
-            changes3, state = detect_changes(state, fs3, tmpdir)
+            changes3, changed_files3, state = detect_changes(state, fs3, tmpdir)
             assert len(changes3) == 1
             assert "[删除]" in changes3[0]
 

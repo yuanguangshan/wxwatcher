@@ -1,10 +1,13 @@
 """Core file scanning and change detection logic."""
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import logging
 import os
+import re
+from functools import lru_cache
 from pathlib import Path
 
 STATE_FILE = os.path.expanduser("~/.wxwatcher/state.json")
@@ -57,6 +60,17 @@ def sha256_file(path: str, max_size: int = 10 * 1024 * 1024) -> str:
         return "ERROR"
 
 
+def _has_glob_chars(pattern: str) -> bool:
+    """检查 pattern 是否包含 fnmatch 通配符。"""
+    return any(c in pattern for c in ('*', '?', '[', ']'))
+
+
+@lru_cache(maxsize=128)
+def _compile_regex(pattern: str) -> re.Pattern:
+    """编译并缓存正则表达式。"""
+    return re.compile(pattern)
+
+
 def should_ignore(
     name: str,
     path: str,
@@ -64,13 +78,36 @@ def should_ignore(
     ignore_exts: Set[str],
     monitor_exts: Set[str]
 ) -> bool:
-    """判断是否应该忽略该文件"""
+    """判断是否应该忽略该文件
+
+    支持三种匹配模式（按顺序判断）：
+    1. 正则：以 "regex:" 开头，如 "regex:\\.tmp\\d+$"
+    2. 通配符：包含 fnmatch 通配符（*、?、[、]），如 "*.log"
+    3. 精确匹配：不含特殊字符的字符串，保持向后兼容
+    """
     parts = Path(path).parts
     for pattern in ignore_patterns:
+        # 1. 正则模式
+        if pattern.startswith("regex:"):
+            regex = _compile_regex(pattern[6:])
+            if regex.search(name) or regex.search(path):
+                return True
+            continue
+
+        # 2. 通配符模式
+        if _has_glob_chars(pattern):
+            if fnmatch.fnmatch(name, pattern):
+                return True
+            # 也用完整路径匹配
+            if fnmatch.fnmatch(path, pattern):
+                return True
+            continue
+
+        # 3. 精确匹配（原有逻辑 — 向后兼容）
         if name == pattern or pattern in parts:
             return True
 
-    # 模糊匹配：忽略以 .sidecar.md 结尾的文件（如 xxx.sidecar.md）
+    # 模糊匹配：忽略以 .sidecar.md 结尾的文件
     if name.endswith(".sidecar.md"):
         return True
 

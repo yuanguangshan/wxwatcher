@@ -69,3 +69,59 @@ class TestLoadConfig:
             cfg = load_config(_make_args(ignore="dist"))
             assert "vendor" in cfg.ignore_patterns
             assert "dist" in cfg.ignore_patterns
+
+    def test_config_file_poll_interval(self):
+        """Config file value used when CLI/env not set."""
+        cfg = load_config(_make_args(), config_file_data={"poll_interval": 60})
+        assert cfg.poll_interval == 60
+
+    def test_cli_overrides_config_file(self):
+        """CLI arg takes precedence over config file."""
+        cfg = load_config(
+            _make_args(interval=10),
+            config_file_data={"poll_interval": 60}
+        )
+        assert cfg.poll_interval == 10
+
+    def test_env_overrides_config_file(self):
+        """Env var takes precedence over config file."""
+        with mock.patch.dict(os.environ, {"WXWATCHER_INTERVAL": "5"}):
+            cfg = load_config(_make_args(), config_file_data={"poll_interval": 60})
+            assert cfg.poll_interval == 5
+
+    def test_ignore_patterns_merged_across_layers(self):
+        """Ignore patterns merged from defaults + config file + CLI."""
+        cfg = load_config(
+            _make_args(ignore="dist"),
+            config_file_data={"ignore": ["*.log", "tmp"]}
+        )
+        assert "dist" in cfg.ignore_patterns
+        assert "*.log" in cfg.ignore_patterns
+        assert "tmp" in cfg.ignore_patterns
+        # defaults still present
+        assert ".git" in cfg.ignore_patterns
+
+    def test_ext_merged_from_config_file(self):
+        """Extensions merged from config file list."""
+        cfg = load_config(
+            _make_args(),
+            config_file_data={"ext": ["py", ".md"]}
+        )
+        assert ".py" in cfg.monitor_exts
+        assert ".md" in cfg.monitor_exts
+
+    def test_push_url_from_config_file(self):
+        """Push URL can come from config file."""
+        cfg = load_config(
+            _make_args(push_url=None),
+            config_file_data={"push_url": "http://config.com/push"}
+        )
+        assert cfg.push_url == "http://config.com/push"
+
+    def test_config_file_push_overridden_by_cli(self):
+        """CLI push_url overrides config file."""
+        cfg = load_config(
+            _make_args(push_url="http://cli.com/push"),
+            config_file_data={"push_url": "http://config.com/push"}
+        )
+        assert cfg.push_url == "http://cli.com/push"

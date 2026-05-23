@@ -12,13 +12,20 @@
 - 自动忽略 `.git`、`__pycache__`、`.venv` 等常见目录
 - 支持按扩展名过滤、自定义忽略规则
 - 分批推送，避免消息过长
-- CLI 参数 / 环境变量 / 默认值三层配置
+- CLI 参数 / 环境变量 / 配置文件 / 默认值四层配置
+- 忽略规则支持通配符（`*.log`）和正则（`regex:\.tmp\d+$`）
 - 日志自动写入 `~/.wxwatcher/file_watcher.log`
 
 ## 安装
 
 ```bash
 pip install wxwatcher
+```
+
+如需使用 YAML 配置文件：
+
+```bash
+pip install wxwatcher[config]
 ```
 
 ## 快速开始
@@ -42,7 +49,8 @@ $ wxwatcher --help
 usage: wxwatcher [-h] [-v] [-i INTERVAL] [--push-url PUSH_URL]
                  [--to-user TO_USER] [--max-batch MAX_BATCH]
                  [--ext EXT] [--ignore IGNORE] [--log-file LOG_FILE]
-                 [--verbose] [--quiet]
+                 [--verbose] [--quiet] [--knowly-url KNOWLY_URL]
+                 [--no-knowly] [--config CONFIG] [--no-config]
                  [dir]
 
 文件变更监控工具，检测到变化时通过微信推送通知
@@ -64,11 +72,44 @@ options:
   --log-file LOG_FILE   日志文件路径
   --verbose             输出 DEBUG 级别日志
   --quiet               仅输出 WARNING 及以上
+  --knowly-url KNOWLY_URL
+                        Knowly 上传 API 地址
+  --no-knowly           禁用上传到 Knowly
+  --config CONFIG       配置文件路径（默认自动搜索）
+  --no-config           跳过配置文件加载
 ```
 
 ## 配置
 
-优先级：**CLI 参数 > 环境变量 > 默认值**
+优先级：**CLI 参数 > 环境变量 > 配置文件 > 默认值**
+
+### YAML 配置文件
+
+搜索顺序：
+1. 当前目录及父目录中的 `.wxwatcher.yml` 或 `wxwatcher.yml`
+2. `~/.wxwatcher/config.yml`
+3. `~/.config/wxwatcher/config.yml`
+
+使用 `--config <path>` 指定具体文件，或 `--no-config` 跳过配置文件加载。
+
+示例 `.wxwatcher.yml`：
+
+```yaml
+push_url: "https://api.example.com/push"
+poll_interval: 15
+to_user: "@all"
+ignore:
+  - "*.log"
+  - "regex:\\.tmp\\d+$"
+  - dist
+  - build
+ext:
+  - py
+  - md
+log_file: "~/.wxwatcher/wxwatcher.log"
+```
+
+### 环境变量
 
 | 环境变量 | 说明 | 默认值 |
 |---|---|---|
@@ -80,6 +121,16 @@ options:
 | `WXWATCHER_LOG_FILE` | 日志文件路径 | `~/.wxwatcher/file_watcher.log` |
 | `WXWATCHER_IGNORE` | 额外忽略模式（逗号分隔） | 无 |
 | `WXWATCHER_EXT` | 仅监控扩展名（逗号分隔） | 全部 |
+
+### 忽略规则
+
+`--ignore` 和环境变量 `WXWATCHER_IGNORE` 支持三种模式：
+
+| 类型 | 示例 | 说明 |
+|------|------|------|
+| 精确匹配 | `.git`, `node_modules` | 文件名或路径段完全匹配 |
+| 通配符 | `*.log`, `~*`, `tmp_*_backup` | 含 `*?[]` 自动识别为 fnmatch |
+| 正则 | `regex:\.tmp\d+$` | 以 `regex:` 前缀，匹配文件名或完整路径 |
 
 也可通过 CLI 参数控制（优先级高于环境变量）：
 
@@ -104,6 +155,31 @@ wxwatcher
 ```bash
 export WXWATCHER_EXT="py,txt,md"
 wxwatcher
+```
+
+## systemd 服务
+
+将 `wxwatcher.service` 复制到 systemd 目录：
+
+```bash
+sudo cp wxwatcher.service /etc/systemd/system/
+```
+
+配置环境变量（推送地址等）：
+
+```bash
+sudo mkdir -p /etc/wxwatcher
+echo 'WXWATCHER_PUSH_URL=https://...' | sudo tee /etc/wxwatcher/environment
+```
+
+也可将 YAML 配置文件放在 `~/.wxwatcher/config.yml`，服务启动时会自动加载。
+
+启用并启动：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now wxwatcher
+sudo journalctl -u wxwatcher -f
 ```
 
 ## 工作原理
@@ -177,6 +253,7 @@ A: `Ctrl+C` 即可安全退出，程序会打印退出日志。
 
 - Python >= 3.9
 - `httpx`
+- `pyyaml`（可选，仅在使用 YAML 配置文件时需要）
 
 ## License
 

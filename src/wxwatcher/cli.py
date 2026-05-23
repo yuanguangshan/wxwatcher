@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from . import __version__
 from .config import load_config, UPLOAD_EXTS
+from .config_file import find_config_file, load_config_file
 from .watcher import scan_directory, fast_scan, detect_changes, save_state, load_state
 from .notifier import send_wechat, upload_to_knowly
 
@@ -34,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quiet", action="store_true", help="仅输出 WARNING 及以上")
     parser.add_argument("--knowly-url", default=None, help="Knowly 上传 API 地址（需显式配置，默认不上传）")
     parser.add_argument("--no-knowly", action="store_true", help="禁用上传到 Knowly")
+    parser.add_argument("--config", default=None, help="配置文件路径（默认自动搜索）")
+    parser.add_argument("--no-config", action="store_true", help="跳过配置文件加载")
     return parser
 
 
@@ -114,9 +117,23 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    # 加载配置，捕获必填项缺失等验证错误
+    # 加载配置文件（如存在）
+    config_file_data = None
+    if not args.no_config:
+        config_path = find_config_file(args.config)
+        if config_path:
+            try:
+                config_file_data = load_config_file(config_path)
+            except ImportError as e:
+                print(f"配置错误: {e}", file=sys.stderr)
+                sys.exit(1)
+            except ValueError as e:
+                print(f"配置错误: {e}", file=sys.stderr)
+                sys.exit(1)
+
+    # 加载配置，合并 CLI 参数、环境变量、配置文件和默认值
     try:
-        cfg = load_config(args)
+        cfg = load_config(args, config_file_data)
     except ValueError as e:
         print(f"配置错误: {e}", file=sys.stderr)
         sys.exit(1)
