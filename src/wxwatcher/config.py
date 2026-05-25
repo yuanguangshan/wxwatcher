@@ -16,7 +16,7 @@ UPLOAD_EXTS: Set[str] = {
 
 IGNORE_PATTERNS: Set[str] = {
     ".git", "__pycache__", ".venv", "node_modules", ".cache",
-    ".DS_Store",
+    ".DS_Store", ".log",
 }
 IGNORE_EXTS: Set[str] = {".pyc", ".pyo"}
 MONITOR_EXTS: Set[str] = set()
