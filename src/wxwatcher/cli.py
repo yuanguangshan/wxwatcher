@@ -26,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-i", "--interval", type=int, default=None, help=f"轮询间隔（秒，默认 30）")
     parser.add_argument("--push-url", default=None, help="推送 API 地址")
+    parser.add_argument("--push-token", default=None, help="推送 Bearer token（默认 0503）")
     parser.add_argument("--to-user", default=None, help="接收人（默认 @all）")
     parser.add_argument("--max-batch", type=int, default=None, help=f"单批最大变更数（默认 50）")
     parser.add_argument("--ext", default=None, help="仅监控指定扩展名（逗号分隔，如 py,md）")
@@ -180,7 +181,7 @@ def main():
         logger.info(f"基线已建立，共 {len(state)} 个文件")
 
     startup_msg = format_startup_msg(watch_dir, len(state))
-    ok = send_wechat(startup_msg, cfg.push_url, cfg.to_user, logger)
+    ok = send_wechat(startup_msg, cfg.push_url, cfg.to_user, logger, token=cfg.push_token)
     logger.info(f"{'[OK]' if ok else '[FAIL]'} 启动消息推送")
 
     last_heartbeat = time.time()
@@ -209,7 +210,7 @@ def main():
                     batches = [changes[i:i + cfg.max_batch] for i in range(0, len(changes), cfg.max_batch)]
                     for idx, batch in enumerate(batches):
                         text = format_change_msg(batch, now, idx, len(batches), len(changes), knowly_paths)
-                        ok = send_wechat(text, cfg.push_url, cfg.to_user, logger)
+                        ok = send_wechat(text, cfg.push_url, cfg.to_user, logger, token=cfg.push_token)
                         logger.info(f"{'[OK]' if ok else '[FAIL]'} 推送变更批次 {idx + 1}，共 {len(batch)} 项")
 
                     save_state(state, watch_dir)

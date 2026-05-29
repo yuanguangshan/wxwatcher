@@ -10,7 +10,8 @@ def send_wechat(
     push_url: str,
     to_user: str,
     logger: logging.Logger,
-    max_retries: int = 3
+    token: str,
+    max_retries: int = 3,
 ) -> bool:
     """
     通过推送接口发送文本消息，带指数退避重试。
@@ -20,16 +21,19 @@ def send_wechat(
         push_url: 推送 API 地址
         to_user: 接收人标识
         logger: 日志记录器
+        token: Bearer token
         max_retries: 最大重试次数，默认 3
 
     Returns:
         True 表示推送成功，False 表示失败
     """
+    headers = {"Authorization": f"Bearer {token}"}
     for attempt in range(max_retries):
         try:
             resp = httpx.post(
                 push_url,
                 json={"msgtype": "text", "content": text, "to_user": to_user},
+                headers=headers,
                 timeout=15,
             )
             resp.raise_for_status()

@@ -53,6 +53,9 @@ class AppConfig:
     log_file: str = ""
     """日志文件路径"""
 
+    push_token: str = "0503"
+    """推送 Bearer token，默认 0503"""
+
     knowly_upload_url: str = ""
     """Knowly 上传 API 地址（空表示不上传）"""
 
@@ -98,6 +101,14 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
             "  - CLI 参数：--push-url <URL>\n"
             "  - 环境变量：export WXWATCHER_PUSH_URL=<URL>"
         )
+
+    push_token = _resolve(
+        args.push_token if hasattr(args, "push_token") else None,
+        "WXWATCHER_PUSH_TOKEN",
+        config_file_data,
+        "push_token",
+        "0503",
+    )
 
     to_user = _resolve(args.to_user, "WXWATCHER_TO_USER", config_file_data, "to_user", DEFAULT_TO_USER)
 
@@ -176,6 +187,7 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
         watch_dir=os.path.abspath(watch_dir),
         poll_interval=interval,
         push_url=push_url,
+        push_token=push_token,
         to_user=to_user,
         max_batch=max_batch,
         ignore_patterns=ignore_patterns,
