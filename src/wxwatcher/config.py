@@ -53,8 +53,8 @@ class AppConfig:
     log_file: str = ""
     """日志文件路径"""
 
-    push_token: str = "0503"
-    """推送 Bearer token，默认 0503"""
+    push_token: str = ""
+    """推送 Bearer token（必填，通过环境变量/CLI/配置文件提供）"""
 
     knowly_upload_url: str = ""
     """Knowly 上传 API 地址（空表示不上传）"""
@@ -107,8 +107,15 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
         "WXWATCHER_PUSH_TOKEN",
         config_file_data,
         "push_token",
-        "0503",
+        "",
     )
+    if not push_token:
+        raise ValueError(
+            "推送 Bearer token 未配置。请通过以下任一方式提供：\n"
+            "  - CLI 参数：--push-token <TOKEN>\n"
+            "  - 环境变量：export WXWATCHER_PUSH_TOKEN=<TOKEN>\n"
+            "  - 配置文件：push_token: <TOKEN>"
+        )
 
     to_user = _resolve(args.to_user, "WXWATCHER_TO_USER", config_file_data, "to_user", DEFAULT_TO_USER)
 
