@@ -71,6 +71,26 @@ def _compile_regex(pattern: str) -> re.Pattern:
     return re.compile(pattern)
 
 
+def _match_single_pattern(pattern: str, name: str, path: str, parts) -> bool:
+    """判断单个 pattern 是否匹配文件，不处理 ! 前缀。"""
+    # 1. 正则模式
+    if pattern.startswith("regex:"):
+        regex = _compile_regex(pattern[6:])
+        return bool(regex.search(name) or regex.search(path))
+
+    # 2. 通配符模式
+    if _has_glob_chars(pattern):
+        if fnmatch.fnmatch(name, pattern):
+            return True
+        # 也用完整路径匹配
+        if fnmatch.fnmatch(path, pattern):
+            return True
+        return False
+
+    # 3. 精确匹配（原有逻辑 — 向后兼容）
+    return name == pattern or pattern in parts
+
+
 def should_ignore(
     name: str,
     path: str,
@@ -84,28 +104,34 @@ def should_ignore(
     1. 正则：以 "regex:" 开头，如 "regex:\\.tmp\\d+$"
     2. 通配符：包含 fnmatch 通配符（*、?、[、]），如 "*.log"
     3. 精确匹配：不含特殊字符的字符串，保持向后兼容
+
+    支持 ! 前缀取消忽略（类似 .gitignore 语法）：
+    - 先检查所有非 ! 开头的模式，若匹配则标记为忽略
+    - 再检查 ! 开头的模式（去掉 ! 后），若匹配则取消忽略
     """
     parts = Path(path).parts
+
+    # 第一遍：正规则（非 ! 前缀）
+    ignored = False
     for pattern in ignore_patterns:
-        # 1. 正则模式
-        if pattern.startswith("regex:"):
-            regex = _compile_regex(pattern[6:])
-            if regex.search(name) or regex.search(path):
-                return True
-            continue
+        if pattern.startswith("!"):
+            continue  # 取消规则留到第二遍处理
+        if _match_single_pattern(pattern, name, path, parts):
+            ignored = True
+            break
 
-        # 2. 通配符模式
-        if _has_glob_chars(pattern):
-            if fnmatch.fnmatch(name, pattern):
-                return True
-            # 也用完整路径匹配
-            if fnmatch.fnmatch(path, pattern):
-                return True
-            continue
-
-        # 3. 精确匹配（原有逻辑 — 向后兼容）
-        if name == pattern or pattern in parts:
-            return True
+    if not ignored:
+        # 没有正规则匹配，继续检查扩展名/监控范围
+        pass
+    else:
+        # 第二遍：取消规则（! 前缀）
+        for pattern in ignore_patterns:
+            if not pattern.startswith("!"):
+                continue
+            negation = pattern[1:]  # 去掉 ! 前缀
+            if _match_single_pattern(negation, name, path, parts):
+                ignored = False
+                break
 
     # 模糊匹配：忽略以 .sidecar.md 结尾的文件
     if name.endswith(".sidecar.md"):
@@ -117,7 +143,7 @@ def should_ignore(
 
     if monitor_exts and ext not in monitor_exts:
         return True
-    return False
+    return ignored
 
 
 def _walk_files(
@@ -233,6 +259,13 @@ def detect_changes(
         # 内容未变（假阳性）
         if old_hash == new_hash:
             new_state[fpath] = old_state[fpath]
+            continue
+
+        # 哈希格式迁移（版本升级：完整 SHA ↔ LARGE 格式切换）
+        if old_hash.startswith("LARGE:") != new_hash.startswith("LARGE:"):
+            logger = logging.getLogger(__name__)
+            logger.debug(f"哈希格式迁移（版本升级），视为无变化: {fpath}")
+            new_state[fpath] = (new_mtime, new_size, new_hash)
             continue
 
         # 内容真正变化

@@ -10,6 +10,8 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from urllib.parse import urlparse
 
+import httpx
+
 from . import __version__
 from .config import load_config, UPLOAD_EXTS
 from .config_file import find_config_file, load_config_file
@@ -75,8 +77,13 @@ def setup_logging(log_file: str, level: int = logging.INFO) -> logging.Logger:
 
 
 def mask_url(url: str) -> str:
-    """脱敏 URL，隐藏 query 参数中的 token/secret。"""
+    """脱敏 URL，隐藏 query 参数和 userinfo 中的 token/secret。"""
     parsed = urlparse(url)
+    if parsed.username:
+        netloc = parsed.hostname or ""
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+        parsed = parsed._replace(netloc=f"<hidden>@{netloc}")
     if parsed.query:
         parsed = parsed._replace(query="<hidden>")
     return parsed.geturl()
@@ -174,6 +181,8 @@ def _init_watcher(args, config_file_data):
 def _main_loop(state, cfg, logger, watch_dir):
     """主循环：轮询检测变更并推送通知。"""
     last_heartbeat = time.time()
+    consecutive_errors = 0
+    max_consecutive_errors = 10
 
     try:
         while True:
@@ -204,13 +213,29 @@ def _main_loop(state, cfg, logger, watch_dir):
 
                     save_state(state, watch_dir)
                     last_heartbeat = time.time()
+                    consecutive_errors = 0  # 正常运行后重置错误计数
                 else:
                     if time.time() - last_heartbeat >= 600:
                         logger.info("无变更")
                         last_heartbeat = time.time()
 
-            except (OSError, IOError) as e:
-                logger.error(f"可恢复异常: {e}")
+            except (OSError, PermissionError) as e:
+                logger.error(f"文件系统异常: {e}")
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.critical(f"连续 {consecutive_errors} 次文件系统错误，退出监控")
+                    raise
+                time.sleep(cfg.poll_interval)
+            except httpx.HTTPError as e:
+                logger.warning(f"网络请求异常: {e}")
+                # 网络错误不递增错误计数，可能只是瞬时中断
+                time.sleep(cfg.poll_interval)
+            except Exception as e:
+                logger.error(f"未预期的异常: {e}")
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.critical(f"连续 {consecutive_errors} 次未知错误，退出监控")
+                    raise
                 time.sleep(cfg.poll_interval)
     except KeyboardInterrupt:
         logger.info("收到退出信号，保存状态...")

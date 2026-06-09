@@ -1,4 +1,5 @@
 """Configuration management for wxwatcher."""
+import hashlib
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
@@ -164,12 +165,13 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
         ext_parts.update(s.strip() if s.strip().startswith(".") else f".{s.strip()}" for s in ext_cli.split(",") if s.strip())
     monitor_exts = ext_parts
 
-    # --- 日志文件 ---
+    # --- 日志文件（按监控目录隔离） ---
     log_file = _resolve(args.log_file, "WXWATCHER_LOG_FILE", config_file_data, "log_file", None)
     if not log_file:
-        log_dir = os.path.expanduser("~/.wxwatcher")
+        log_dir = os.path.expanduser("~/.wxwatcher/logs")
         os.makedirs(log_dir, exist_ok=True)
-        log_file = os.path.join(log_dir, "file_watcher.log")
+        dir_hash = hashlib.md5(watch_dir.encode("utf-8")).hexdigest()[:8]
+        log_file = os.path.join(log_dir, f"wxwatcher_{dir_hash}.log")
 
     # --- Knowly 上传地址 ---
     no_knowly = False
