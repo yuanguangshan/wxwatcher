@@ -114,24 +114,8 @@ def format_change_msg(
     return text
 
 
-def main():
-    parser = build_parser()
-    args = parser.parse_args()
-
-    # 加载配置文件（如存在）
-    config_file_data = None
-    if not args.no_config:
-        config_path = find_config_file(args.config)
-        if config_path:
-            try:
-                config_file_data = load_config_file(config_path)
-            except ImportError as e:
-                print(f"配置错误: {e}", file=sys.stderr)
-                sys.exit(1)
-            except ValueError as e:
-                print(f"配置错误: {e}", file=sys.stderr)
-                sys.exit(1)
-
+def _init_watcher(args, config_file_data):
+    """初始化并返回 (cfg, logger, state, watch_dir)。出错时直接 sys.exit。"""
     # 加载配置，合并 CLI 参数、环境变量、配置文件和默认值
     try:
         cfg = load_config(args, config_file_data)
@@ -166,7 +150,7 @@ def main():
     logger.info(f"轮询间隔: {cfg.poll_interval}秒")
     logger.info(f"推送地址: {mask_url(cfg.push_url)}")
     if cfg.knowly_upload_url:
-        logger.info(f"Knowly 上传: {cfg.knowly_upload_url}")
+        logger.info(f"Knowly 上传: {mask_url(cfg.knowly_upload_url)}")
 
     # 尝试加载持久化状态（先按 watch_dir 查找，再回退到旧默认文件）
     saved_state, saved_dir = load_state(watch_dir)
@@ -184,6 +168,11 @@ def main():
     ok = send_wechat(startup_msg, cfg.push_url, cfg.to_user, logger, token=cfg.push_token)
     logger.info(f"{'[OK]' if ok else '[FAIL]'} 启动消息推送")
 
+    return cfg, logger, state, watch_dir
+
+
+def _main_loop(state, cfg, logger, watch_dir):
+    """主循环：轮询检测变更并推送通知。"""
     last_heartbeat = time.time()
 
     try:
@@ -227,6 +216,28 @@ def main():
         logger.info("收到退出信号，保存状态...")
         save_state(state, watch_dir)
         logger.info("程序结束")
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    # 加载配置文件（如存在）
+    config_file_data = None
+    if not args.no_config:
+        config_path = find_config_file(args.config)
+        if config_path:
+            try:
+                config_file_data = load_config_file(config_path)
+            except ImportError as e:
+                print(f"配置错误: {e}", file=sys.stderr)
+                sys.exit(1)
+            except ValueError as e:
+                print(f"配置错误: {e}", file=sys.stderr)
+                sys.exit(1)
+
+    cfg, logger, state, watch_dir = _init_watcher(args, config_file_data)
+    _main_loop(state, cfg, logger, watch_dir)
 
 
 if __name__ == "__main__":

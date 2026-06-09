@@ -121,10 +121,10 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
 
     # --- 数值型 ---
     interval = _resolve(args.interval, "WXWATCHER_INTERVAL", config_file_data, "poll_interval", DEFAULT_POLL_INTERVAL)
-    interval = int(interval)
+    interval = int(interval) if interval != "" else DEFAULT_POLL_INTERVAL
 
     max_batch = _resolve(args.max_batch, "WXWATCHER_MAX_BATCH", config_file_data, "max_batch", DEFAULT_MAX_BATCH)
-    max_batch = int(max_batch)
+    max_batch = int(max_batch) if max_batch != "" else DEFAULT_MAX_BATCH
 
     # --- 忽略规则：合并所有层 ---
     ignore_parts = list(IGNORE_PATTERNS)  # 从默认值开始
@@ -173,7 +173,7 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
 
     # --- Knowly 上传地址 ---
     no_knowly = False
-    if hasattr(args, "no-knowly") and args.no-knowly:
+    if hasattr(args, "no_knowly") and args.no_knowly:
         no_knowly = True
     elif config_file_data and config_file_data.get("no-knowly"):
         no_knowly = True

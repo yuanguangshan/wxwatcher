@@ -7,8 +7,8 @@ from wxwatcher.config import load_config, AppConfig
 
 
 def _make_args(**overrides):
-    defaults = dict(dir=None, push_url="http://example.com/push", to_user=None, interval=None,
-                    max_batch=None, log_file=None, ext=None, ignore=None)
+    defaults = dict(dir=None, push_url="http://example.com/push", push_token="test-token",
+                    to_user=None, interval=None, max_batch=None, log_file=None, ext=None, ignore=None)
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
 
