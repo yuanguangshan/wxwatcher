@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import logging
 import os
 import sys
@@ -220,7 +221,10 @@ def _main_loop(state, cfg, logger, watch_dir):
                         last_heartbeat = time.time()
 
             except (OSError, PermissionError) as e:
-                logger.error(f"文件系统异常: {e}")
+                # 监控目录消失 → 致命错误，立即退出
+                if isinstance(e, OSError) and getattr(e, "errno", None) == errno.ENOENT:
+                    logger.critical(f"监控目录已不存在，退出: {e}")
+                    raise
                 consecutive_errors += 1
                 if consecutive_errors >= max_consecutive_errors:
                     logger.critical(f"连续 {consecutive_errors} 次文件系统错误，退出监控")

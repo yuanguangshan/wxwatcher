@@ -31,6 +31,23 @@ class TestMaskUrl:
         result = mask_url("https://example.com/api/push")
         assert result == "https://example.com/api/push"
 
+    def test_url_with_userinfo(self):
+        result = mask_url("https://token123@example.com/api")
+        assert "token123" not in result
+        assert "<hidden>@" in result
+
+    def test_url_with_userinfo_and_port(self):
+        result = mask_url("https://user:pass@example.com:8080/api")
+        assert "user" not in result
+        assert "pass" not in result
+        assert "<hidden>@example.com:8080" in result
+
+    def test_url_with_userinfo_and_query(self):
+        result = mask_url("https://token@example.com/api?key=abc")
+        assert "token" not in result
+        assert "abc" not in result
+        assert "<hidden>" in result
+
 
 class TestFormatStartupMsg:
     def test_contains_key_fields(self):

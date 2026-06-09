@@ -202,7 +202,7 @@ def detect_changes(
     old_state: Dict[str, Tuple[float, int, str]],
     fast_state: Dict[str, Tuple[float, int]],
     watch_dir: str
-) -> Tuple[List[str], Dict[str, Tuple[float, int, str]]]:
+) -> Tuple[List[str], List[str], Dict[str, Tuple[float, int, str]]]:
     """
     两阶段变化检测 + 状态同步（一次哈希，两处使用）：
     1. 先用 mtime/size 快速判断疑似变化文件

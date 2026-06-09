@@ -131,6 +131,7 @@ log_file: "~/.wxwatcher/wxwatcher.log"
 | 精确匹配 | `.git`, `node_modules` | 文件名或路径段完全匹配 |
 | 通配符 | `*.log`, `~*`, `tmp_*_backup` | 含 `*?[]` 自动识别为 fnmatch |
 | 正则 | `regex:\.tmp\d+$` | 以 `regex:` 前缀，匹配文件名或完整路径 |
+| 取反 | `!*.log` | 以 `!` 开头，取消之前匹配的忽略规则（类似 `.gitignore`） |
 
 也可通过 CLI 参数控制（优先级高于环境变量）：
 

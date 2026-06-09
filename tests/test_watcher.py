@@ -89,6 +89,17 @@ class TestShouldIgnore:
         assert should_ignore("test.log", "/proj/test.log", patterns, set(), set()) is True
         assert should_ignore("app.log", "/proj/app.log", patterns, set(), set()) is True
 
+    def test_negation_cancels_ignore(self):
+        """! prefix cancels a previously matched ignore pattern."""
+        patterns = {".git", "!important.git"}
+        assert should_ignore("important.git", "/proj/important.git", patterns, set(), set()) is False
+
+    def test_negation_only_cancels_matched(self):
+        """! prefix only cancels if the positive pattern would have matched."""
+        patterns = {"*.log", "!important.log"}
+        assert should_ignore("debug.log", "/proj/debug.log", patterns, set(), set()) is True
+        assert should_ignore("important.log", "/proj/important.log", patterns, set(), set()) is False
+
 
 class TestFmtSize:
     def test_bytes(self):

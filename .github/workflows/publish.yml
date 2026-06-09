@@ -16,8 +16,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.9"
-      - name: Install build
-        run: pip install build
+      - name: Install build & test deps
+        run: |
+          pip install build pytest
+          pip install .[all] 2>/dev/null || pip install .  # install package + optional deps
+      - name: Run tests
+        run: pytest tests/ -v --ignore=tests/test_config_file.py
       - name: Build
         run: python -m build
       - name: Publish to PyPI
