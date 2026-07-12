@@ -196,10 +196,11 @@ def _main_loop(state, cfg, logger, watch_dir):
                     # 上传可支持的文件到 Knowly
                     knowly_paths = []
                     if cfg.knowly_upload_url:
+                        auth = (cfg.knowly_user, cfg.knowly_pass) if cfg.knowly_user and cfg.knowly_pass else None
                         for fpath in changed_files:
                             ext = os.path.splitext(fpath)[1].lower()
                             if ext in UPLOAD_EXTS:
-                                uploaded_path = upload_to_knowly(fpath, cfg.knowly_upload_url, logger)
+                                uploaded_path = upload_to_knowly(fpath, cfg.knowly_upload_url, logger, auth=auth)
                                 if uploaded_path:
                                     knowly_paths.append((os.path.relpath(fpath, watch_dir), uploaded_path))
                                 else:

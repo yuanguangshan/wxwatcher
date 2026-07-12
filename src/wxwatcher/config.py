@@ -60,6 +60,12 @@ class AppConfig:
     knowly_upload_url: str = ""
     """Knowly 上传 API 地址（空表示不上传）"""
 
+    knowly_user: str = ""
+    """Knowly Basic Auth 用户名"""
+
+    knowly_pass: str = ""
+    """Knowly Basic Auth 密码"""
+
 
 def _resolve(value, env_key: str, config_data: Optional[Dict[str, Any]], config_key: str, default):
     """Resolve a single config value with priority: CLI > env > config_file > default."""
@@ -192,6 +198,21 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
             ""
         )
 
+    knowly_user = _resolve(
+        None,
+        "WXWATCHER_KNOWLY_USER",
+        config_file_data,
+        "knowly_user",
+        ""
+    )
+    knowly_pass = _resolve(
+        None,
+        "WXWATCHER_KNOWLY_PASS",
+        config_file_data,
+        "knowly_pass",
+        ""
+    )
+
     return AppConfig(
         watch_dir=os.path.abspath(watch_dir),
         poll_interval=interval,
@@ -204,4 +225,6 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
         monitor_exts=monitor_exts,
         log_file=log_file,
         knowly_upload_url=knowly_url,
+        knowly_user=knowly_user,
+        knowly_pass=knowly_pass,
     )

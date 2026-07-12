@@ -91,12 +91,13 @@ def send_wechat(
     return result
 
 
-def _do_upload_to_knowly(file_path: str, upload_url: str) -> str | None:
+def _do_upload_to_knowly(file_path: str, upload_url: str, auth: tuple[str, str] | None = None) -> str | None:
     """执行单次 Knowly 上传（无重试）。"""
     with open(file_path, "rb") as f:
         resp = httpx.post(
             upload_url,
             files={"file": f},
+            auth=httpx.BasicAuth(*auth) if auth else None,
             timeout=30,
         )
         resp.raise_for_status()
@@ -110,7 +111,8 @@ def upload_to_knowly(
     file_path: str,
     upload_url: str,
     logger: logging.Logger,
-    max_retries: int = 3
+    max_retries: int = 3,
+    auth: tuple[str, str] | None = None,
 ) -> str | None:
     """
     上传文件到 Knowly 服务器，带指数退避重试。
@@ -120,12 +122,13 @@ def upload_to_knowly(
         upload_url: Knowly 上传 API 地址
         logger: 日志记录器
         max_retries: 最大重试次数，默认 3
+        auth: (username, password) Basic Auth 凭证
 
     Returns:
         上传成功返回远程路径，失败返回 None
     """
     return retry_call(
-        lambda: _do_upload_to_knowly(file_path, upload_url),
+        lambda: _do_upload_to_knowly(file_path, upload_url, auth=auth),
         logger,
         label="Knowly 上传",
         max_retries=max_retries,
