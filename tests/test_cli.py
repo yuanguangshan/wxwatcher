@@ -1,5 +1,5 @@
 """Unit tests for wxwatcher CLI module."""
-from wxwatcher.cli import build_parser, mask_url, format_startup_msg, format_change_msg
+from wxwatcher.cli import build_parser, mask_url, format_startup_msg, format_change_msg, cap_changes
 
 
 class TestBuildParser:
@@ -67,3 +67,29 @@ class TestFormatChangeMsg:
         msg = format_change_msg(["[修改] a.txt"], "12:00:00", 0, 3, 100)
         assert "第 1/3 批" in msg
         assert "100 项" in msg
+
+
+class TestCapChanges:
+    def test_below_limit_unchanged(self):
+        changes = [f"[修改] f{i}.txt" for i in range(80)]
+        out, truncated = cap_changes(changes, max_total=100)
+        assert len(out) == 80
+        assert truncated == 0
+
+    def test_exact_limit_unchanged(self):
+        changes = [f"[修改] f{i}.txt" for i in range(100)]
+        out, truncated = cap_changes(changes, max_total=100)
+        assert len(out) == 100
+        assert truncated == 0
+
+    def test_over_limit_truncated(self):
+        changes = [f"[删除] f{i}.txt" for i in range(250)]
+        out, truncated = cap_changes(changes, max_total=100)
+        assert len(out) == 100
+        assert truncated == 150
+
+    def test_keeps_first_items(self):
+        changes = [f"[增加] f{i}.txt" for i in range(120)]
+        out, truncated = cap_changes(changes, max_total=100)
+        assert out[0] == "[增加] f0.txt"
+        assert truncated == 20

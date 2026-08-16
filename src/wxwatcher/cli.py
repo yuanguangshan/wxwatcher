@@ -20,6 +20,18 @@ from .watcher import scan_directory, fast_scan, detect_changes, save_state, load
 from .notifier import send_wechat, upload_to_knowly
 
 
+def cap_changes(changes: list[str], max_total: int = 100):
+    """把变更列表截断到最多 max_total 条，避免单轮刷屏。
+
+    返回 (截断后的清单, 被截掉的条数)。小于等于上限时不截断。
+    """
+    truncated = 0
+    if len(changes) > max_total:
+        truncated = len(changes) - max_total
+        changes = changes[:max_total]
+    return changes, truncated
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wxwatcher",
@@ -207,9 +219,16 @@ def _main_loop(state, cfg, logger, watch_dir):
                                     logger.warning(f"Knowly 上传失败: {fpath}")
 
                     now = datetime.now().strftime("%H:%M:%S")
+                    # ---- 封顶：单轮变更超过 100 条时只推前 100 条，避免微信刷屏 ----
+                    changes, truncated = cap_changes(changes, max_total=100)
+                    if truncated:
+                        logger.warning(f"变更过多，截断为前 100 条（另有 {truncated} 条未显示）")
                     batches = [changes[i:i + cfg.max_batch] for i in range(0, len(changes), cfg.max_batch)]
                     for idx, batch in enumerate(batches):
                         text = format_change_msg(batch, now, idx, len(batches), len(changes), knowly_paths)
+                        if truncated and idx == len(batches) - 1:
+                            text = text.replace("By: 苑广山的文件监控助手",
+                                                f"⚠️ 另有 {truncated} 条变更未显示\nBy: 苑广山的文件监控助手")
                         ok = send_wechat(text, cfg.push_url, cfg.to_user, logger, token=cfg.push_token)
                         logger.info(f"{'[OK]' if ok else '[FAIL]'} 推送变更批次 {idx + 1}，共 {len(batch)} 项")
 
