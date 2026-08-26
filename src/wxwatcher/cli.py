@@ -43,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-i", "--interval", type=int, default=None, help=f"轮询间隔（秒，默认 30）")
     parser.add_argument("--push-url", default=None, help="推送 API 地址")
     parser.add_argument("--push-token", default=None, help="推送 Bearer token（必填）")
+    parser.add_argument("--host-name", default=None, help="通知中展示的来源主机名（默认自动取本机 hostname）")
     parser.add_argument("--to-user", default=None, help="接收人（默认 @all）")
     parser.add_argument("--max-batch", type=int, default=None, help="单批最大变更数（默认 50）")
     parser.add_argument("--max-changes", type=int, default=None, help="单轮推送的最大变更条数，超出截断（默认 100）")
@@ -106,11 +107,13 @@ def mask_url(url: str) -> str:
     return parsed.geturl()
 
 
-def format_startup_msg(watch_dir: str, file_count: int) -> str:
+def format_startup_msg(watch_dir: str, file_count: int, hostname: str = "") -> str:
     now = datetime.now().strftime("%H:%M:%S")
+    host_line = f"运行主机: {hostname}\n" if hostname else ""
     return (
         f"文件监控已启动\n"
         f"{'─' * 10}\n"
+        f"{host_line}"
         f"监控目录: {os.path.basename(watch_dir)}\n"
         f"文件数量: {file_count}\n"
         f"启动时间: {now}\n"
@@ -125,9 +128,10 @@ def format_change_msg(
     batch_idx: int,
     total_batches: int,
     total_changes: int,
-    knowly_paths: list[tuple[str, str]] | None = None
+    knowly_paths: list[tuple[str, str]] | None = None,
+    hostname: str = ""
 ) -> str:
-    header = f"文件变更  {now}"
+    header = f"文件变更  {now}" + (f" @{hostname}" if hostname else "")
     text = header + "\n" + f"{'─' * 10}\n" + "\n".join(f"{i + 1}. {c}" for i, c in enumerate(changes))
     if total_batches > 1:
         text += f"\n{'─' * 10}\n共检测到 {total_changes} 项变更（第 {batch_idx + 1}/{total_batches} 批）"
@@ -173,6 +177,7 @@ def _init_watcher(args, config_file_data):
     logger.info(f"监控目录: {watch_dir}")
     logger.info(f"轮询间隔: {cfg.poll_interval}秒")
     logger.info(f"推送地址: {mask_url(cfg.push_url)}")
+    logger.info(f"来源主机: {cfg.hostname}")
     if cfg.knowly_upload_url:
         logger.info(f"Knowly 上传: {mask_url(cfg.knowly_upload_url)}")
 
@@ -188,7 +193,7 @@ def _init_watcher(args, config_file_data):
         state = scan_directory(watch_dir, cfg.ignore_patterns, cfg.ignore_exts, cfg.monitor_exts)
         logger.info(f"基线已建立，共 {len(state)} 个文件")
 
-    startup_msg = format_startup_msg(watch_dir, len(state))
+    startup_msg = format_startup_msg(watch_dir, len(state), hostname=cfg.hostname)
     if cfg.dry_run:
         logger.info("[dry-run] 跳过启动消息推送")
     else:
@@ -237,7 +242,8 @@ def _main_loop(state, cfg, logger, watch_dir, once: bool = False):
                         logger.warning(f"变更过多，截断为前 {cfg.max_changes} 条（另有 {truncated} 条未显示）")
                     batches = [changes[i:i + cfg.max_batch] for i in range(0, len(changes), cfg.max_batch)]
                     for idx, batch in enumerate(batches):
-                        text = format_change_msg(batch, now, idx, len(batches), len(changes), knowly_paths)
+                        text = format_change_msg(batch, now, idx, len(batches), len(changes), knowly_paths,
+                                                 hostname=cfg.hostname)
                         if truncated and idx == len(batches) - 1:
                             text = text.replace("By: 苑广山的文件监控助手",
                                                 f"⚠️ 另有 {truncated} 条变更未显示\nBy: 苑广山的文件监控助手")

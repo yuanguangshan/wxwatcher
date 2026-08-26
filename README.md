@@ -16,6 +16,7 @@
 - `--dry-run` 零配置试用：只检测打印，不推送；`--once` 单轮模式适配 cron/systemd timer
 - SIGTERM / Ctrl+C 均优雅退出并保存状态，重启后增量对比不重建基线
 - CLI 参数 / 环境变量 / 配置文件 / 默认值四层配置
+- 通知自带来源主机名（`--host-name` 可自定义别名），多机部署一眼区分
 - 忽略规则支持通配符（`*.log`）和正则（`regex:\.tmp\d+$`）
 - 日志自动写入 `~/.wxwatcher/` 并按监控目录隔离，支持轮转
 
@@ -70,6 +71,8 @@ options:
   --push-url PUSH_URL   推送 API 地址
   --push-token PUSH_TOKEN
                         推送 Bearer token（必填）
+  --host-name HOST_NAME
+                        通知中展示的来源主机名（默认自动取本机 hostname）
   --to-user TO_USER     接收人（默认 @all）
   --max-batch MAX_BATCH
                         单批最大变更数（默认 50）
@@ -108,6 +111,7 @@ options:
 push_url: "https://api.example.com/push"
 poll_interval: 15
 to_user: "@all"
+host_name: "家里Mac"   # 多机部署时区分通知来源，默认自动取本机 hostname
 ignore:
   - "*.log"
   - "regex:\\.tmp\\d+$"
@@ -131,6 +135,7 @@ log_file: "~/.wxwatcher/wxwatcher.log"
 | `WXWATCHER_INTERVAL` | 轮询间隔（秒） | `30` |
 | `WXWATCHER_PUSH_URL` | 推送 API 地址 | **必须配置** |
 | `WXWATCHER_PUSH_TOKEN` | 推送 Bearer token | **必须配置** |
+| `WXWATCHER_HOST_NAME` | 通知中展示的来源主机名 | 本机 hostname |
 | `WXWATCHER_TO_USER` | 接收人 | `@all` |
 | `WXWATCHER_MAX_BATCH` | 单批最大变更数 | `50` |
 | `WXWATCHER_MAX_CHANGES` | 单轮推送最大变更条数（超出截断） | `100` |
@@ -236,6 +241,7 @@ sudo journalctl -u wxwatcher -f
 ```
 文件监控已启动
 ──────────
+运行主机: YGS-Mac-mini-2
 监控目录: project
 文件数量: 1203
 启动时间: 02:30:00
@@ -244,7 +250,7 @@ By: 苑广山的文件监控助手
 ```
 
 ```
-文件变更  02:35:00
+文件变更  02:35:00 @YGS-Mac-mini-2
 ──────────
 1. [新增] config.py (+2.1KB)
 2. [修改] README.md (+120B)

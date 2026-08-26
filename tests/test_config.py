@@ -164,3 +164,24 @@ class TestLoadConfig:
         cfg = load_config(_make_args(),
                           config_file_data={"no-knowly": True})
         assert cfg.knowly_upload_url == ""
+
+    def test_hostname_defaults_to_local_machine(self):
+        """未指定时自动取本机主机名（非空）。"""
+        from wxwatcher.config import detect_hostname
+        cfg = load_config(_make_args())
+        assert cfg.hostname == detect_hostname()
+        assert cfg.hostname
+
+    def test_hostname_cli_override(self):
+        """--host-name 自定义别名优先于自动检测。"""
+        cfg = load_config(_make_args(host_name="家里Mac"))
+        assert cfg.hostname == "家里Mac"
+
+    def test_hostname_env_and_config_layers(self):
+        with mock.patch.dict(os.environ, {"WXWATCHER_HOST_NAME": "env-box"}):
+            assert load_config(_make_args()).hostname == "env-box"
+            # 配置文件被环境变量压住
+            cfg = load_config(_make_args(), config_file_data={"host_name": "cfg-box"})
+            assert cfg.hostname == "env-box"
+        cfg = load_config(_make_args(), config_file_data={"host_name": "cfg-box"})
+        assert cfg.hostname == "cfg-box"

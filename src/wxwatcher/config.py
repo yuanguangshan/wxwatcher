@@ -1,6 +1,7 @@
 """Configuration management for wxwatcher."""
 import hashlib
 import os
+import socket
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
@@ -50,6 +51,9 @@ class AppConfig:
     dry_run: bool = False
     """只检测并打印变更，不推送、不写状态"""
 
+    hostname: str = ""
+    """通知中展示的来源主机名（空则自动取本机 hostname）"""
+
     ignore_patterns: Set[str] = field(default_factory=lambda: IGNORE_PATTERNS.copy())
     """要忽略的目录/文件名模式"""
 
@@ -85,6 +89,20 @@ def _resolve(value, env_key: str, config_data: Optional[Dict[str, Any]], config_
     if config_data and config_key in config_data:
         return config_data[config_key]
     return default
+
+
+def detect_hostname() -> str:
+    """取本机短主机名，用于在通知中标识来源机器。
+
+    去掉 macOS 的 .local 后缀；取不到时返回 "unknown"。
+    """
+    try:
+        name = (socket.gethostname() or "").strip()
+    except OSError:
+        name = ""
+    if name.endswith(".local"):
+        name = name[:-len(".local")]
+    return name.split(".")[0] if name else "unknown"
 
 
 def _is_dry_run(args) -> bool:
@@ -250,6 +268,16 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
         ""
     )
 
+    # --- 来源主机名：默认自动取本机，可被四层配置覆盖（多机部署区分通知来源） ---
+    hostname = _resolve(
+        getattr(args, "host_name", None),
+        "WXWATCHER_HOST_NAME",
+        config_file_data,
+        "host_name",
+        "",
+    )
+    hostname = str(hostname).strip() if hostname else detect_hostname()
+
     return AppConfig(
         watch_dir=os.path.abspath(watch_dir),
         poll_interval=interval,
@@ -259,6 +287,7 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
         max_batch=max_batch,
         max_changes=max_changes,
         dry_run=bool(getattr(args, "dry_run", False)),
+        hostname=hostname,
         ignore_patterns=ignore_patterns,
         ignore_exts=ignore_ext_parts,
         monitor_exts=monitor_exts,

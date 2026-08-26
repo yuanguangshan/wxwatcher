@@ -67,6 +67,14 @@ class TestFormatStartupMsg:
         assert "42" in msg
         assert "文件监控已启动" in msg
 
+    def test_hostname_line(self):
+        msg = format_startup_msg("/tmp/myproject", 42, hostname="ygs-mac")
+        assert "运行主机: ygs-mac" in msg
+
+    def test_hostname_omitted_when_empty(self):
+        msg = format_startup_msg("/tmp/myproject", 42, hostname="")
+        assert "运行主机" not in msg
+
 
 class TestFormatChangeMsg:
     def test_single_change(self):
@@ -78,6 +86,15 @@ class TestFormatChangeMsg:
         msg = format_change_msg(["[修改] a.txt"], "12:00:00", 0, 3, 100)
         assert "第 1/3 批" in msg
         assert "100 项" in msg
+
+    def test_hostname_in_header(self):
+        """多机场景：变更通知头部直接带来源主机，不展开即可区分。"""
+        msg = format_change_msg(["[修改] a.txt"], "12:00:00", 0, 1, 1, hostname="nas")
+        assert "文件变更  12:00:00 @nas" in msg
+
+    def test_no_hostname_no_at(self):
+        msg = format_change_msg(["[修改] a.txt"], "12:00:00", 0, 1, 1)
+        assert "@" not in msg
 
 
 class TestCapChanges:
