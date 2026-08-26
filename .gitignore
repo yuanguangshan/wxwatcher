@@ -7,3 +7,7 @@ __pycache__/
 *.egg
 .venv/
 .DS_Store
+
+# Reasonix 工具产物与本地笔记（含敏感信息，勿提交）
+REASONIX.md
+.reasonix/
