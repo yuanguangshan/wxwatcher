@@ -125,3 +125,42 @@ class TestLoadConfig:
             config_file_data={"push_url": "http://config.com/push"}
         )
         assert cfg.push_url == "http://cli.com/push"
+
+    def test_dry_run_waives_push_credentials(self):
+        """--dry-run 不推送，缺 push_url/push_token 也应可用（零配置试用）。"""
+        cfg = load_config(_make_args(push_url=None, push_token=None, dry_run=True))
+        assert cfg.dry_run is True
+        assert cfg.push_url == ""
+        assert cfg.push_token == ""
+
+    def test_push_token_still_required_without_dry_run(self):
+        import pytest
+        with pytest.raises(ValueError):
+            load_config(_make_args(push_token=None))
+
+    def test_max_changes_default_and_overrides(self):
+        cfg = load_config(_make_args())
+        assert cfg.max_changes == 100
+        cfg = load_config(_make_args(max_changes=20))
+        assert cfg.max_changes == 20
+        cfg = load_config(_make_args(), config_file_data={"max_changes": 7})
+        assert cfg.max_changes == 7
+
+    def test_ignore_ext_from_config_file(self):
+        """ignore_ext 配置层与默认值合并，自动补点号并转小写。"""
+        cfg = load_config(
+            _make_args(),
+            config_file_data={"ignore_ext": ["TMP", ".bak"]}
+        )
+        assert ".tmp" in cfg.ignore_exts
+        assert ".bak" in cfg.ignore_exts
+        assert ".pyc" in cfg.ignore_exts  # 默认值仍在
+
+    def test_no_knowly_accepts_both_key_styles(self):
+        """配置文件同时接受 no_knowly 与 no-knowly。"""
+        cfg = load_config(_make_args(knowly_url="http://k/upload"),
+                          config_file_data={"knowly_url": "http://k/upload", "no_knowly": True})
+        assert cfg.knowly_upload_url == ""
+        cfg = load_config(_make_args(),
+                          config_file_data={"no-knowly": True})
+        assert cfg.knowly_upload_url == ""

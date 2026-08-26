@@ -7,8 +7,9 @@ import json
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
-from pathlib import Path
+from typing import Dict, List, Set, Tuple
 
 STATE_FILE = os.path.expanduser("~/.wxwatcher/state.json")
 
@@ -50,10 +51,10 @@ def sha256_file(path: str, max_size: int = 10 * 1024 * 1024) -> str:
             partial_hash = h.hexdigest()
             return f"LARGE:{size}:{partial_hash}"
 
-        # 正常文件，计算完整哈希
+        # 正常文件，计算完整哈希（64KB 块减少系统调用次数）
         h = hashlib.sha256()
         with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
+            for chunk in iter(lambda: f.read(65536), b""):
                 h.update(chunk)
         return h.hexdigest()
     except (OSError, PermissionError):
@@ -71,8 +72,12 @@ def _compile_regex(pattern: str) -> re.Pattern:
     return re.compile(pattern)
 
 
-def _match_single_pattern(pattern: str, name: str, path: str, parts) -> bool:
-    """判断单个 pattern 是否匹配文件，不处理 ! 前缀。"""
+def _match_single_pattern(pattern: str, name: str, path: str) -> bool:
+    """判断单个 pattern 是否匹配文件，不处理 ! 前缀。
+
+    精确匹配分支按需把 path 按分隔符切开（等价于 Path.parts，但省去
+    Path 对象构造），避免热路径上每个文件都做一次完整解析。
+    """
     # 1. 正则模式
     if pattern.startswith("regex:"):
         regex = _compile_regex(pattern[6:])
@@ -88,7 +93,7 @@ def _match_single_pattern(pattern: str, name: str, path: str, parts) -> bool:
         return False
 
     # 3. 精确匹配（原有逻辑 — 向后兼容）
-    return name == pattern or pattern in parts
+    return name == pattern or pattern in path.split(os.sep)
 
 
 def should_ignore(
@@ -96,7 +101,8 @@ def should_ignore(
     path: str,
     ignore_patterns: Set[str],
     ignore_exts: Set[str],
-    monitor_exts: Set[str]
+    monitor_exts: Set[str],
+    is_dir: bool = False,
 ) -> bool:
     """判断是否应该忽略该文件
 
@@ -108,34 +114,32 @@ def should_ignore(
     支持 ! 前缀取消忽略（类似 .gitignore 语法）：
     - 先检查所有非 ! 开头的模式，若匹配则标记为忽略
     - 再检查 ! 开头的模式（去掉 ! 后），若匹配则取消忽略
-    """
-    parts = Path(path).parts
 
+    目录剪枝（is_dir=True）只应用 ignore_patterns；扩展名过滤是文件级
+    规则——目录没有有意义的扩展名，若对其应用 monitor_exts 会把整棵
+    子树错误地剪掉。
+    """
     # 第一遍：正规则（非 ! 前缀）
     ignored = False
     for pattern in ignore_patterns:
         if pattern.startswith("!"):
             continue  # 取消规则留到第二遍处理
-        if _match_single_pattern(pattern, name, path, parts):
+        if _match_single_pattern(pattern, name, path):
             ignored = True
             break
 
-    if not ignored:
-        # 没有正规则匹配，继续检查扩展名/监控范围
-        pass
-    else:
+    if ignored:
         # 第二遍：取消规则（! 前缀）
         for pattern in ignore_patterns:
             if not pattern.startswith("!"):
                 continue
             negation = pattern[1:]  # 去掉 ! 前缀
-            if _match_single_pattern(negation, name, path, parts):
+            if _match_single_pattern(negation, name, path):
                 ignored = False
                 break
 
-    # 模糊匹配：忽略以 .sidecar.md 结尾的文件
-    if name.endswith(".sidecar.md"):
-        return True
+    if is_dir:
+        return ignored
 
     ext = os.path.splitext(name)[1].lower()
     if ext in ignore_exts:
@@ -154,9 +158,10 @@ def _walk_files(
 ):
     """生成器：遍历需要监控的文件路径和 stat 结果。"""
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        # 目录剪枝只看 ignore_patterns（ext 过滤不适用于目录）
         dirnames[:] = [
             d for d in dirnames
-            if not should_ignore(d, os.path.join(dirpath, d), ignore_patterns, ignore_exts, monitor_exts)
+            if not should_ignore(d, os.path.join(dirpath, d), ignore_patterns, ignore_exts, monitor_exts, is_dir=True)
         ]
         for fname in filenames:
             fpath = os.path.join(dirpath, fname)
@@ -177,12 +182,23 @@ def scan_directory(
     ignore_exts: Set[str],
     monitor_exts: Set[str]
 ) -> Dict[str, Tuple[float, int, str]]:
-    """全量扫描目录，返回 {文件路径: (mtime, file_size, sha256)}"""
-    result = {}
-    for fpath, stat in _walk_files(root, ignore_patterns, ignore_exts, monitor_exts):
-        file_hash = sha256_file(fpath)
-        result[fpath] = (stat.st_mtime, stat.st_size, file_hash)
-    return result
+    """全量扫描目录，返回 {文件路径: (mtime, file_size, sha256)}。
+
+    哈希计算在线程池中并行执行（哈希读文件会释放 GIL），大目录首次
+    建立基线的耗时可随核数近似线性下降。
+    """
+    entries = list(_walk_files(root, ignore_patterns, ignore_exts, monitor_exts))
+    if not entries:
+        return {}
+
+    max_workers = min(16, (os.cpu_count() or 1) * 4, len(entries))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        hashes = list(pool.map(lambda e: sha256_file(e[0]), entries))
+
+    return {
+        fpath: (stat.st_mtime, stat.st_size, file_hash)
+        for (fpath, stat), file_hash in zip(entries, hashes)
+    }
 
 
 def fast_scan(

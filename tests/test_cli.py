@@ -20,6 +20,17 @@ class TestBuildParser:
         args = parser.parse_args(["--ignore", "dist,build"])
         assert args.ignore == "dist,build"
 
+    def test_once_and_dry_run_flags(self):
+        parser = build_parser()
+        args = parser.parse_args(["--once", "--dry-run"])
+        assert args.once is True
+        assert args.dry_run is True
+
+    def test_max_changes(self):
+        parser = build_parser()
+        args = parser.parse_args(["--max-changes", "20"])
+        assert args.max_changes == 20
+
 
 class TestMaskUrl:
     def test_url_with_query(self):

@@ -5,6 +5,7 @@ import argparse
 import errno
 import logging
 import os
+import signal
 import sys
 import time
 from datetime import datetime
@@ -43,7 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--push-url", default=None, help="推送 API 地址")
     parser.add_argument("--push-token", default=None, help="推送 Bearer token（必填）")
     parser.add_argument("--to-user", default=None, help="接收人（默认 @all）")
-    parser.add_argument("--max-batch", type=int, default=None, help=f"单批最大变更数（默认 50）")
+    parser.add_argument("--max-batch", type=int, default=None, help="单批最大变更数（默认 50）")
+    parser.add_argument("--max-changes", type=int, default=None, help="单轮推送的最大变更条数，超出截断（默认 100）")
     parser.add_argument("--ext", default=None, help="仅监控指定扩展名（逗号分隔，如 py,md）")
     parser.add_argument("--ignore", default=None, help="忽略的目录/文件名（逗号分隔，如 dist,build）")
     parser.add_argument("--log-file", default=None, help="日志文件路径")
@@ -53,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-knowly", action="store_true", help="禁用上传到 Knowly")
     parser.add_argument("--config", default=None, help="配置文件路径（默认自动搜索）")
     parser.add_argument("--no-config", action="store_true", help="跳过配置文件加载")
+    parser.add_argument("--dry-run", action="store_true", help="只检测并打印变更，不推送、不写状态")
+    parser.add_argument("--once", action="store_true", help="只跑一轮检测后退出（适合 cron / systemd timer）")
     return parser
 
 
@@ -185,14 +189,17 @@ def _init_watcher(args, config_file_data):
         logger.info(f"基线已建立，共 {len(state)} 个文件")
 
     startup_msg = format_startup_msg(watch_dir, len(state))
-    ok = send_wechat(startup_msg, cfg.push_url, cfg.to_user, logger, token=cfg.push_token)
-    logger.info(f"{'[OK]' if ok else '[FAIL]'} 启动消息推送")
+    if cfg.dry_run:
+        logger.info("[dry-run] 跳过启动消息推送")
+    else:
+        ok = send_wechat(startup_msg, cfg.push_url, cfg.to_user, logger, token=cfg.push_token)
+        logger.info(f"{'[OK]' if ok else '[FAIL]'} 启动消息推送")
 
     return cfg, logger, state, watch_dir
 
 
-def _main_loop(state, cfg, logger, watch_dir):
-    """主循环：轮询检测变更并推送通知。"""
+def _main_loop(state, cfg, logger, watch_dir, once: bool = False):
+    """主循环：轮询检测变更并推送通知。once=True 时只跑一轮后退出。"""
     last_heartbeat = time.time()
     consecutive_errors = 0
     max_consecutive_errors = 10
@@ -200,11 +207,16 @@ def _main_loop(state, cfg, logger, watch_dir):
     try:
         while True:
             try:
-                time.sleep(cfg.poll_interval)
                 fast_state = fast_scan(watch_dir, cfg.ignore_patterns, cfg.ignore_exts, cfg.monitor_exts)
                 changes, changed_files, state = detect_changes(state, fast_state, watch_dir)
 
-                if changes:
+                if changes and cfg.dry_run:
+                    # dry-run：只打印变更，不推送、不写状态文件
+                    for c in changes:
+                        logger.info(f"[dry-run] {c}")
+                    last_heartbeat = time.time()
+                    consecutive_errors = 0  # 正常运行后重置错误计数
+                elif changes:
                     # 上传可支持的文件到 Knowly
                     knowly_paths = []
                     if cfg.knowly_upload_url:
@@ -219,10 +231,10 @@ def _main_loop(state, cfg, logger, watch_dir):
                                     logger.warning(f"Knowly 上传失败: {fpath}")
 
                     now = datetime.now().strftime("%H:%M:%S")
-                    # ---- 封顶：单轮变更超过 100 条时只推前 100 条，避免微信刷屏 ----
-                    changes, truncated = cap_changes(changes, max_total=100)
+                    # ---- 封顶：单轮变更过多时只推前 N 条，避免微信刷屏 ----
+                    changes, truncated = cap_changes(changes, max_total=cfg.max_changes)
                     if truncated:
-                        logger.warning(f"变更过多，截断为前 100 条（另有 {truncated} 条未显示）")
+                        logger.warning(f"变更过多，截断为前 {cfg.max_changes} 条（另有 {truncated} 条未显示）")
                     batches = [changes[i:i + cfg.max_batch] for i in range(0, len(changes), cfg.max_batch)]
                     for idx, batch in enumerate(batches):
                         text = format_change_msg(batch, now, idx, len(batches), len(changes), knowly_paths)
@@ -240,11 +252,21 @@ def _main_loop(state, cfg, logger, watch_dir):
                         logger.info("无变更")
                         last_heartbeat = time.time()
 
+                if once:
+                    # 单轮模式也要落盘状态，cron/timer 下次运行才能增量对比
+                    if not cfg.dry_run:
+                        save_state(state, watch_dir)
+                    logger.info("单轮检测完成（--once），退出")
+                    return
+                # 轮询间隔放在迭代末尾，启动后立即做首轮检测
+                time.sleep(cfg.poll_interval)
+
             except (OSError, PermissionError) as e:
-                # 监控目录消失 → 致命错误，立即退出
+                # 监控目录消失 → 致命错误，干净退出（不抛 traceback）
                 if isinstance(e, OSError) and getattr(e, "errno", None) == errno.ENOENT:
+                    save_state(state, watch_dir)
                     logger.critical(f"监控目录已不存在，退出: {e}")
-                    raise
+                    sys.exit(1)
                 consecutive_errors += 1
                 if consecutive_errors >= max_consecutive_errors:
                     logger.critical(f"连续 {consecutive_errors} 次文件系统错误，退出监控")
@@ -267,6 +289,19 @@ def _main_loop(state, cfg, logger, watch_dir):
         logger.info("程序结束")
 
 
+def _install_signal_handlers() -> None:
+    """把 SIGTERM 转为 KeyboardInterrupt，让 systemd stop / kill 也走
+    优雅退出路径（保存状态后再退出，避免重启后重建基线）。"""
+
+    def _handle(signum, frame):
+        raise KeyboardInterrupt
+
+    try:
+        signal.signal(signal.SIGTERM, _handle)
+    except (ValueError, OSError):
+        pass  # 非主线程或平台不支持时保持默认行为
+
+
 def main():
     parser = build_parser()
     args = parser.parse_args()
@@ -285,8 +320,9 @@ def main():
                 print(f"配置错误: {e}", file=sys.stderr)
                 sys.exit(1)
 
+    _install_signal_handlers()
     cfg, logger, state, watch_dir = _init_watcher(args, config_file_data)
-    _main_loop(state, cfg, logger, watch_dir)
+    _main_loop(state, cfg, logger, watch_dir, once=args.once)
 
 
 if __name__ == "__main__":

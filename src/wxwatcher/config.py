@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Set
 # --- 默认配置 ---
 DEFAULT_POLL_INTERVAL = 30
 DEFAULT_MAX_BATCH = 50
+DEFAULT_MAX_CHANGES = 100
 DEFAULT_TO_USER = "@all"
 
 # 支持上传到 Knowly 的文件扩展名
@@ -18,6 +19,7 @@ UPLOAD_EXTS: Set[str] = {
 IGNORE_PATTERNS: Set[str] = {
     ".git", "__pycache__", ".venv", "node_modules", ".cache",
     ".DS_Store", ".log",
+    "*.sidecar.md",
 }
 IGNORE_EXTS: Set[str] = {".pyc", ".pyo"}
 MONITOR_EXTS: Set[str] = set()
@@ -41,6 +43,12 @@ class AppConfig:
 
     max_batch: int = DEFAULT_MAX_BATCH
     """单批最大变更数量"""
+
+    max_changes: int = DEFAULT_MAX_CHANGES
+    """单轮推送的最大变更条数，超出部分截断"""
+
+    dry_run: bool = False
+    """只检测并打印变更，不推送、不写状态"""
 
     ignore_patterns: Set[str] = field(default_factory=lambda: IGNORE_PATTERNS.copy())
     """要忽略的目录/文件名模式"""
@@ -79,6 +87,11 @@ def _resolve(value, env_key: str, config_data: Optional[Dict[str, Any]], config_
     return default
 
 
+def _is_dry_run(args) -> bool:
+    """判断本次调用是否为 --dry-run（dry-run 不推送，推送配置可豁免）。"""
+    return bool(getattr(args, "dry_run", False))
+
+
 def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppConfig:
     """
     加载配置，合并 CLI 参数、环境变量、配置文件和默认值。
@@ -100,14 +113,17 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
     if not watch_dir:
         watch_dir = os.getcwd()
 
-    # 推送 URL 为必填项
+    # 推送 URL 为必填项（--dry-run 不推送，可豁免）
     push_url = _resolve(args.push_url, "WXWATCHER_PUSH_URL", config_file_data, "push_url", None)
     if not push_url:
-        raise ValueError(
-            "推送地址未配置。请通过以下任一方式提供：\n"
-            "  - CLI 参数：--push-url <URL>\n"
-            "  - 环境变量：export WXWATCHER_PUSH_URL=<URL>"
-        )
+        if _is_dry_run(args):
+            push_url = ""
+        else:
+            raise ValueError(
+                "推送地址未配置。请通过以下任一方式提供：\n"
+                "  - CLI 参数：--push-url <URL>\n"
+                "  - 环境变量：export WXWATCHER_PUSH_URL=<URL>"
+            )
 
     push_token = _resolve(
         args.push_token if hasattr(args, "push_token") else None,
@@ -117,12 +133,13 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
         "",
     )
     if not push_token:
-        raise ValueError(
-            "推送 Bearer token 未配置。请通过以下任一方式提供：\n"
-            "  - CLI 参数：--push-token <TOKEN>\n"
-            "  - 环境变量：export WXWATCHER_PUSH_TOKEN=<TOKEN>\n"
-            "  - 配置文件：push_token: <TOKEN>"
-        )
+        if not _is_dry_run(args):
+            raise ValueError(
+                "推送 Bearer token 未配置。请通过以下任一方式提供：\n"
+                "  - CLI 参数：--push-token <TOKEN>\n"
+                "  - 环境变量：export WXWATCHER_PUSH_TOKEN=<TOKEN>\n"
+                "  - 配置文件：push_token: <TOKEN>"
+            )
 
     to_user = _resolve(args.to_user, "WXWATCHER_TO_USER", config_file_data, "to_user", DEFAULT_TO_USER)
 
@@ -132,6 +149,15 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
 
     max_batch = _resolve(args.max_batch, "WXWATCHER_MAX_BATCH", config_file_data, "max_batch", DEFAULT_MAX_BATCH)
     max_batch = int(max_batch) if max_batch != "" else DEFAULT_MAX_BATCH
+
+    max_changes = _resolve(
+        getattr(args, "max_changes", None),
+        "WXWATCHER_MAX_CHANGES",
+        config_file_data,
+        "max_changes",
+        DEFAULT_MAX_CHANGES,
+    )
+    max_changes = int(max_changes) if max_changes != "" else DEFAULT_MAX_CHANGES
 
     # --- 忽略规则：合并所有层 ---
     ignore_parts = list(IGNORE_PATTERNS)  # 从默认值开始
@@ -150,6 +176,16 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
     if hasattr(args, "ignore") and args.ignore:
         ignore_parts.extend(s.strip() for s in args.ignore.split(",") if s.strip())
     ignore_patterns = set(ignore_parts)
+
+    # --- 忽略扩展名：合并默认值与配置文件层 ---
+    ignore_ext_parts = set(IGNORE_EXTS)
+    if config_file_data and "ignore_ext" in config_file_data:
+        cfg_ignore_ext = config_file_data["ignore_ext"]
+        if isinstance(cfg_ignore_ext, list):
+            items = [str(s).strip().lower() for s in cfg_ignore_ext if str(s).strip()]
+        else:
+            items = [s.strip().lower() for s in str(cfg_ignore_ext).split(",") if s.strip()]
+        ignore_ext_parts.update(s if s.startswith(".") else f".{s}" for s in items)
 
     # --- 监控扩展名：合并所有层 ---
     ext_parts = set(MONITOR_EXTS)  # 从默认值开始
@@ -180,10 +216,11 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
         log_file = os.path.join(log_dir, f"wxwatcher_{dir_hash}.log")
 
     # --- Knowly 上传地址 ---
+    # 配置文件同时接受下划线与连字符两种键名，避免 YAML 风格不一致踩坑
     no_knowly = False
     if hasattr(args, "no_knowly") and args.no_knowly:
         no_knowly = True
-    elif config_file_data and config_file_data.get("no-knowly"):
+    elif config_file_data and (config_file_data.get("no_knowly") or config_file_data.get("no-knowly")):
         no_knowly = True
 
     knowly_url = ""
@@ -220,8 +257,10 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
         push_token=push_token,
         to_user=to_user,
         max_batch=max_batch,
+        max_changes=max_changes,
+        dry_run=bool(getattr(args, "dry_run", False)),
         ignore_patterns=ignore_patterns,
-        ignore_exts=IGNORE_EXTS.copy(),
+        ignore_exts=ignore_ext_parts,
         monitor_exts=monitor_exts,
         log_file=log_file,
         knowly_upload_url=knowly_url,

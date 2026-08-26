@@ -9,12 +9,15 @@
 ## 特性
 
 - 两阶段扫描：先 `stat` 快速检测，仅对疑似变化文件计算 SHA256
+- 基线哈希多线程并行，大目录首次启动显著加速
 - 自动忽略 `.git`、`__pycache__`、`.venv` 等常见目录
-- 支持按扩展名过滤、自定义忽略规则
-- 分批推送，避免消息过长
+- 支持按扩展名过滤（含全部子目录）、自定义忽略规则
+- 分批推送，单轮变更条数封顶（可配置），避免刷屏
+- `--dry-run` 零配置试用：只检测打印，不推送；`--once` 单轮模式适配 cron/systemd timer
+- SIGTERM / Ctrl+C 均优雅退出并保存状态，重启后增量对比不重建基线
 - CLI 参数 / 环境变量 / 配置文件 / 默认值四层配置
 - 忽略规则支持通配符（`*.log`）和正则（`regex:\.tmp\d+$`）
-- 日志自动写入 `~/.wxwatcher/file_watcher.log`
+- 日志自动写入 `~/.wxwatcher/` 并按监控目录隔离，支持轮转
 
 ## 安装
 
@@ -47,10 +50,11 @@ wxwatcher /path/to/watch
 ```bash
 $ wxwatcher --help
 usage: wxwatcher [-h] [-v] [-i INTERVAL] [--push-url PUSH_URL]
-                 [--to-user TO_USER] [--max-batch MAX_BATCH]
+                 [--push-token PUSH_TOKEN] [--to-user TO_USER]
+                 [--max-batch MAX_BATCH] [--max-changes MAX_CHANGES]
                  [--ext EXT] [--ignore IGNORE] [--log-file LOG_FILE]
-                 [--verbose] [--quiet] [--knowly-url KNOWLY_URL]
-                 [--no-knowly] [--config CONFIG] [--no-config]
+                 [--verbose] [--quiet] [--knowly-url KNOWLY_URL] [--no-knowly]
+                 [--config CONFIG] [--no-config] [--dry-run] [--once]
                  [dir]
 
 文件变更监控工具，检测到变化时通过微信推送通知
@@ -61,22 +65,28 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   -v, --version         show program's version number and exit
-  -i INTERVAL, --interval INTERVAL
+  -i, --interval INTERVAL
                         轮询间隔（秒，默认 30）
   --push-url PUSH_URL   推送 API 地址
+  --push-token PUSH_TOKEN
+                        推送 Bearer token（必填）
   --to-user TO_USER     接收人（默认 @all）
   --max-batch MAX_BATCH
                         单批最大变更数（默认 50）
+  --max-changes MAX_CHANGES
+                        单轮推送的最大变更条数，超出截断（默认 100）
   --ext EXT             仅监控指定扩展名（逗号分隔，如 py,md）
   --ignore IGNORE       忽略的目录/文件名（逗号分隔，如 dist,build）
   --log-file LOG_FILE   日志文件路径
   --verbose             输出 DEBUG 级别日志
   --quiet               仅输出 WARNING 及以上
   --knowly-url KNOWLY_URL
-                        Knowly 上传 API 地址
+                        Knowly 上传 API 地址（需显式配置，默认不上传）
   --no-knowly           禁用上传到 Knowly
   --config CONFIG       配置文件路径（默认自动搜索）
   --no-config           跳过配置文件加载
+  --dry-run             只检测并打印变更，不推送、不写状态
+  --once                只跑一轮检测后退出（适合 cron / systemd timer）
 ```
 
 ## 配置
@@ -106,6 +116,10 @@ ignore:
 ext:
   - py
   - md
+max_changes: 100      # 单轮推送封顶，超出截断
+ignore_ext:           # 追加要忽略的扩展名（默认已有 .pyc/.pyo）
+  - ".bak"
+no_knowly: true       # 也接受 no-knowly 写法
 log_file: "~/.wxwatcher/wxwatcher.log"
 ```
 
@@ -116,11 +130,17 @@ log_file: "~/.wxwatcher/wxwatcher.log"
 | `WXWATCHER_DIR` | 监控目录 | 当前目录 |
 | `WXWATCHER_INTERVAL` | 轮询间隔（秒） | `30` |
 | `WXWATCHER_PUSH_URL` | 推送 API 地址 | **必须配置** |
+| `WXWATCHER_PUSH_TOKEN` | 推送 Bearer token | **必须配置** |
 | `WXWATCHER_TO_USER` | 接收人 | `@all` |
 | `WXWATCHER_MAX_BATCH` | 单批最大变更数 | `50` |
-| `WXWATCHER_LOG_FILE` | 日志文件路径 | `~/.wxwatcher/file_watcher.log` |
+| `WXWATCHER_MAX_CHANGES` | 单轮推送最大变更条数（超出截断） | `100` |
+| `WXWATCHER_LOG_FILE` | 日志文件路径 | `~/.wxwatcher/logs/wxwatcher_<dirhash>.log` |
 | `WXWATCHER_IGNORE` | 额外忽略模式（逗号分隔） | 无 |
-| `WXWATCHER_EXT` | 仅监控扩展名（逗号分隔） | 全部 |
+| `WXWATCHER_EXT` | 仅监控扩展名（逗号分隔，含全部子目录） | 全部 |
+| `WXWATCHER_KNOWLY_URL` | Knowly 上传 API 地址 | 不上传 |
+| `WXWATCHER_KNOWLY_USER` / `WXWATCHER_KNOWLY_PASS` | Knowly Basic Auth 凭证 | 无 |
+
+> `--dry-run` 模式下不推送，`WXWATCHER_PUSH_URL` / `PUSH_TOKEN` 可省略。
 
 ### 忽略规则
 
@@ -132,6 +152,18 @@ log_file: "~/.wxwatcher/wxwatcher.log"
 | 通配符 | `*.log`, `~*`, `tmp_*_backup` | 含 `*?[]` 自动识别为 fnmatch |
 | 正则 | `regex:\.tmp\d+$` | 以 `regex:` 前缀，匹配文件名或完整路径 |
 | 取反 | `!*.log` | 以 `!` 开头，取消之前匹配的忽略规则（类似 `.gitignore`） |
+
+默认忽略规则包含 `.git`、`__pycache__`、`.venv`、`node_modules`、`.cache`、`.DS_Store`、`.log`、`*.sidecar.md`；扩展名默认忽略 `.pyc`/`.pyo`（可通过配置文件 `ignore_ext` 追加）。
+
+### dry-run 与单轮模式
+
+```bash
+# 零配置试用：只检测并打印变更，不推送、不写状态
+wxwatcher --dry-run ~/myproject
+
+# 单轮模式：建立/加载基线 → 检测一轮 → 保存状态退出（cron / systemd timer 友好）
+wxwatcher --once --push-url ... --push-token ... /data
+```
 
 也可通过 CLI 参数控制（优先级高于环境变量）：
 
@@ -197,7 +229,7 @@ sudo journalctl -u wxwatcher -f
   └─ send_wechat()        # 分批推送到微信
 ```
 
-大目录下性能表现良好：5000+ 文件的目录，每轮仅需毫秒级扫描，变化文件少时几乎零磁盘 IO。
+大目录下性能表现良好：5000+ 文件的目录，每轮仅需毫秒级扫描，变化文件少时几乎零磁盘 IO；首次建立基线时 SHA256 计算多线程并行（哈希读文件释放 GIL）。
 
 ## 推送消息示例
 
@@ -248,7 +280,7 @@ A: 当前仅支持微信推送接口。可以通过 `--push-url` 指定兼容该
 A: 不会。采用两阶段扫描，每轮只读元数据，仅疑似变化文件才计算 hash。
 
 **Q: 如何停止监控？**  
-A: `Ctrl+C` 即可安全退出，程序会打印退出日志。
+A: `Ctrl+C` 或 `kill <pid>`（SIGTERM）均可安全退出，程序会保存当前状态后退出；下次启动直接增量对比，不重建基线。
 
 ## 依赖
 

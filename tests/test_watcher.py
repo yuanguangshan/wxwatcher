@@ -79,9 +79,15 @@ class TestShouldIgnore:
         assert should_ignore(".github", "/proj/.github", patterns, set(), set()) is False
 
     def test_sidecar_still_ignored(self):
-        """.sidecar.md pattern still works (hardcoded)"""
-        assert should_ignore("foo.sidecar.md", "/proj/foo.sidecar.md", set(), set(), set()) is True
-        assert should_ignore("bar.sidecar.md", "/proj/bar.sidecar.md", set(), set(), set()) is True
+        """*.sidecar.md is in the default ignore patterns and still matches"""
+        from wxwatcher.config import IGNORE_PATTERNS
+        assert "*.sidecar.md" in IGNORE_PATTERNS
+        assert should_ignore(
+            "foo.sidecar.md", "/proj/foo.sidecar.md", IGNORE_PATTERNS, set(), set()
+        ) is True
+        # 用户可以用 ! 取消这条默认规则（硬编码时代做不到）
+        patterns = {"*.sidecar.md", "!keep.sidecar.md"}
+        assert should_ignore("keep.sidecar.md", "/proj/keep.sidecar.md", patterns, set(), set()) is False
 
     def test_regex_cache(self):
         """Same regex pattern is cached (call twice to verify no error)"""
@@ -250,6 +256,26 @@ class TestWalkFiles:
             results = list(_walk_files(tmpdir, {".git"}, {".pyc"}, set()))
             assert len(results) == 1
             assert results[0][0].endswith("a.py")
+
+    def test_monitor_exts_keeps_subdirectories(self):
+        """--ext 过滤不得把子目录剪掉（回归：曾导致只能监控根目录文件）。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "sub", "deep"))
+            for rel in ["a.py", "sub/b.py", "sub/deep/c.py", "sub/readme.md"]:
+                with open(os.path.join(tmpdir, rel), "w") as f:
+                    f.write("x")
+            found = {path for path, _ in _walk_files(tmpdir, set(), set(), {".py"})}
+            assert os.path.join(tmpdir, "a.py") in found
+            assert os.path.join(tmpdir, "sub", "b.py") in found
+            assert os.path.join(tmpdir, "sub", "deep", "c.py") in found
+            # ext 过滤仍对文件生效
+            assert os.path.join(tmpdir, "sub", "readme.md") not in found
+
+    def test_dir_pruning_ignores_ext_rules(self):
+        """目录剪枝只应用 ignore_patterns，ignore_exts/monitor_exts 不参与。"""
+        patterns = {"node_modules"}
+        assert should_ignore("node_modules", "/p/node_modules", patterns, {".pyc"}, {".py"}, is_dir=True) is True
+        assert should_ignore("src", "/p/src", patterns, {".pyc"}, {".py"}, is_dir=True) is False
 
 
 class TestScanDirectory:
