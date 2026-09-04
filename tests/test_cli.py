@@ -121,3 +121,66 @@ class TestCapChanges:
         out, truncated = cap_changes(changes, max_total=100)
         assert out[0] == "[增加] f0.txt"
         assert truncated == 20
+
+
+class TestMainLoopMissingDir:
+    """回归测试：监控目录消失时不得误报全部文件删除（P0 修复）。"""
+
+    def _make_state(self, tmp_path):
+        watch_dir = tmp_path / "watch"
+        watch_dir.mkdir()
+        (watch_dir / "a.txt").write_text("hello")
+        from wxwatcher.watcher import scan_directory
+
+        state = scan_directory(str(watch_dir), set(), set(), set())
+        assert len(state) == 1
+        return str(watch_dir), state
+
+    def _make_cfg(self, tmp_path):
+        from wxwatcher.config import AppConfig
+
+        return AppConfig(
+            watch_dir=str(tmp_path / "watch"),
+            poll_interval=0,
+            dry_run=True,
+        )
+
+    def test_once_mode_skips_when_dir_missing(self, tmp_path, caplog):
+        """目录消失时 once 模式应直接跳过退出，状态保持不变。"""
+        import logging
+
+        from wxwatcher.cli import _main_loop
+
+        watch_dir, state = self._make_state(tmp_path)
+        cfg = self._make_cfg(tmp_path)
+        import shutil
+
+        shutil.rmtree(watch_dir)
+        with caplog.at_level(logging.WARNING):
+            _main_loop(state, cfg, logging.getLogger("test"), watch_dir, once=True)
+        assert any("跳过本轮" in r.message for r in caplog.records)
+        # 状态未被清空（基线还在）
+        assert len(state) == 1
+
+    def test_dir_restored_no_false_delete(self, tmp_path, caplog):
+        """目录短暂消失后恢复，不应产生任何删除告警。"""
+        import logging
+        import shutil
+
+        from wxwatcher.cli import _main_loop
+
+        watch_dir, state = self._make_state(tmp_path)
+        cfg = self._make_cfg(tmp_path)
+        shutil.rmtree(watch_dir)
+        _main_loop(state, cfg, logging.getLogger("test"), watch_dir, once=True)
+        # 恢复目录（文件内容不变）
+        watch_dir_new = tmp_path / "watch"
+        watch_dir_new.mkdir()
+        (watch_dir_new / "a.txt").write_text("hello")
+        changes, changed_files, new_state = _main_loop.__globals__["detect_changes"](
+            state,
+            _main_loop.__globals__["fast_scan"](str(watch_dir_new), set(), set(), set()),
+            str(watch_dir_new),
+        )
+        assert changes == []
+        assert len(new_state) == 1

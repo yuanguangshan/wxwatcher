@@ -208,10 +208,30 @@ def _main_loop(state, cfg, logger, watch_dir, once: bool = False):
     last_heartbeat = time.time()
     consecutive_errors = 0
     max_consecutive_errors = 10
+    missing_rounds = 0
 
     try:
         while True:
             try:
+                if not os.path.isdir(watch_dir):
+                    # 目录暂时消失（外置盘未挂载/网络盘掉线）时 os.walk 会静默
+                    # 返回空结果，若直接对比会把全部文件误报为删除并清空基线。
+                    # 因此跳过本轮，连续多轮缺失才视为目录被真移除而退出。
+                    missing_rounds += 1
+                    if missing_rounds >= max_consecutive_errors:
+                        save_state(state, watch_dir)
+                        logger.critical(f"监控目录连续 {missing_rounds} 轮不存在，退出监控: {watch_dir}")
+                        sys.exit(1)
+                    logger.warning(
+                        f"监控目录不存在（第 {missing_rounds}/{max_consecutive_errors} 轮），跳过本轮: {watch_dir}"
+                    )
+                    if once:
+                        logger.info("单轮检测跳过（目录不存在），退出")
+                        return
+                    time.sleep(cfg.poll_interval)
+                    continue
+                missing_rounds = 0
+
                 fast_state = fast_scan(watch_dir, cfg.ignore_patterns, cfg.ignore_exts, cfg.monitor_exts)
                 changes, changed_files, state = detect_changes(state, fast_state, watch_dir)
 
