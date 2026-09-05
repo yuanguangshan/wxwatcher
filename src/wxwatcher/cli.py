@@ -237,7 +237,7 @@ def _main_loop(state, cfg, logger, watch_dir, once: bool = False):
                 missing_rounds = 0
 
                 fast_state = fast_scan(watch_dir, cfg.ignore_patterns, cfg.ignore_exts, cfg.monitor_exts)
-                changes, changed_files, state = detect_changes(state, fast_state, watch_dir)
+                changes, changed_files, new_state = detect_changes(state, fast_state, watch_dir)
 
                 if changes and cfg.dry_run:
                     # dry-run：只打印变更，不推送、不写状态文件
@@ -265,6 +265,7 @@ def _main_loop(state, cfg, logger, watch_dir, once: bool = False):
                     if truncated:
                         logger.warning(f"变更过多，截断为前 {cfg.max_changes} 条（另有 {truncated} 条未显示）")
                     batches = [changes[i:i + cfg.max_batch] for i in range(0, len(changes), cfg.max_batch)]
+                    push_ok = True
                     for idx, batch in enumerate(batches):
                         text = format_change_msg(batch, now, idx, len(batches), len(changes), knowly_paths,
                                                  hostname=cfg.hostname)
@@ -272,9 +273,17 @@ def _main_loop(state, cfg, logger, watch_dir, once: bool = False):
                             text = text.replace("By: 苑广山的文件监控助手",
                                                 f"⚠️ 另有 {truncated} 条变更未显示\nBy: 苑广山的文件监控助手")
                         ok = send_wechat(text, cfg.push_url, cfg.to_user, logger, token=cfg.push_token)
+                        if not ok:
+                            push_ok = False
                         logger.info(f"{'[OK]' if ok else '[FAIL]'} 推送变更批次 {idx + 1}，共 {len(batch)} 项")
 
-                    save_state(state, watch_dir)
+                    if push_ok:
+                        state = new_state
+                        save_state(state, watch_dir)
+                    else:
+                        # 任一批次推送失败：保留旧基线不落盘，下一轮会重新检测并重推，
+                        # 避免"消息被丢弃但状态照存"造成的永久漏报
+                        logger.warning("存在推送失败的批次，本轮不更新基线，下轮将重新检测并重推")
                     last_heartbeat = time.time()
                     consecutive_errors = 0  # 正常运行后重置错误计数
                 else:

@@ -265,11 +265,17 @@ def detect_changes(
 
         new_hash = sha256_file(fpath)
 
-        # 错误处理：如果哈希计算失败，保留旧状态并跳过
+        # 哈希失败：以 mtime/size 变化为证据上报，并记录 ERROR 基线。
+        # 之前直接沿用旧状态条目（旧 mtime/size），导致下轮又判定为变化、
+        # 再次哈希再次失败——既陷入每轮重复哈希的死循环，又永远不上报。
         if new_hash == "ERROR" or old_hash == "ERROR":
             logger = logging.getLogger(__name__)
-            logger.warning(f"无法计算哈希: {fpath}")
-            new_state[fpath] = old_state[fpath]
+            logger.warning(f"无法计算哈希，按 mtime/size 变化上报: {fpath}")
+            rel = os.path.relpath(fpath, watch_dir)
+            diff = fmt_size_diff(new_size - old_size)
+            changes.append(f"[修改] {rel} ({diff})")
+            changed_files.append(fpath)
+            new_state[fpath] = (new_mtime, new_size, new_hash)
             continue
 
         # 内容未变（假阳性）

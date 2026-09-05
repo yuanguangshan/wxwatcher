@@ -378,3 +378,43 @@ class TestStatePersistence:
         assert file1 != file2  # different paths for different dirs
         assert file1.endswith(".json")
         assert file2.endswith(".json")
+
+
+class TestErrorHashLoop:
+    """回归：哈希失败文件按 mtime/size 上报一次并落基线，不再每轮重复哈希。"""
+
+    def test_error_hash_reports_and_stops_loop(self, tmp_path, monkeypatch):
+        from wxwatcher import watcher
+
+        d = tmp_path / "w"
+        d.mkdir()
+        f = d / "secret.txt"
+        f.write_text("v1")
+        state = watcher.scan_directory(str(d), set(), set(), set())
+
+        f.write_text("v2-longer-content")
+        f.chmod(0o000)  # 内容已变但不可读 → sha256 必然返回 ERROR
+        try:
+            calls = {"n": 0}
+            real = watcher.sha256_file
+
+            def counting(p, *a, **k):
+                calls["n"] += 1
+                return real(p, *a, **k)
+
+            monkeypatch.setattr(watcher, "sha256_file", counting)
+            changes, changed, new_state = watcher.detect_changes(
+                state, watcher.fast_scan(str(d), set(), set(), set()), str(d)
+            )
+            assert any("[修改]" in c for c in changes), f"应上报修改: {changes}"
+            assert new_state[str(f)][2] == "ERROR"
+            after = calls["n"]
+
+            # 下一轮 mtime/size 未变：不应产生变更，也不应再次哈希（死循环已断）
+            changes2, _, new_state2 = watcher.detect_changes(
+                new_state, watcher.fast_scan(str(d), set(), set(), set()), str(d)
+            )
+            assert changes2 == []
+            assert calls["n"] == after
+        finally:
+            f.chmod(0o644)
