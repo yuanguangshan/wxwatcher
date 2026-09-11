@@ -18,6 +18,8 @@
 - CLI 参数 / 环境变量 / 配置文件 / 默认值四层配置
 - 通知自带来源主机名（`--host-name` 可自定义别名），多机部署一眼区分
 - 忽略规则支持通配符（`*.log`）和正则（`regex:\.tmp\d+$`）
+- 内置文件 API（`--file-api-port`）：提供 `/api/file`、`/api/recent`、`/api/health`，配合 weclaw 等跨机取文件
+- 文件 API 强制路径沙箱（`--file-api-allow-roots` + 敏感路径黑名单），杜绝越权读取系统凭证
 - 日志自动写入 `~/.wxwatcher/` 并按监控目录隔离，支持轮转
 
 ## 安装
@@ -51,11 +53,14 @@ wxwatcher /path/to/watch
 ```bash
 $ wxwatcher --help
 usage: wxwatcher [-h] [-v] [-i INTERVAL] [--push-url PUSH_URL]
-                 [--push-token PUSH_TOKEN] [--to-user TO_USER]
-                 [--max-batch MAX_BATCH] [--max-changes MAX_CHANGES]
-                 [--ext EXT] [--ignore IGNORE] [--log-file LOG_FILE]
-                 [--verbose] [--quiet] [--knowly-url KNOWLY_URL] [--no-knowly]
-                 [--config CONFIG] [--no-config] [--dry-run] [--once]
+                 [--push-token PUSH_TOKEN] [--host-name HOST_NAME]
+                 [--to-user TO_USER] [--max-batch MAX_BATCH]
+                 [--max-changes MAX_CHANGES] [--ext EXT]
+                 [--file-api-port FILE_API_PORT]
+                 [--file-api-allow-roots FILE_API_ALLOW_ROOTS]
+                 [--ignore IGNORE] [--log-file LOG_FILE] [--verbose] [--quiet]
+                 [--knowly-url KNOWLY_URL] [--no-knowly] [--config CONFIG]
+                 [--no-config] [--dry-run] [--once]
                  [dir]
 
 文件变更监控工具，检测到变化时通过微信推送通知
@@ -79,6 +84,10 @@ options:
   --max-changes MAX_CHANGES
                         单轮推送的最大变更条数，超出截断（默认 100）
   --ext EXT             仅监控指定扩展名（逗号分隔，如 py,md）
+  --file-api-port FILE_API_PORT
+                        文件 API 端口（0=禁用，如 9120）
+  --file-api-allow-roots FILE_API_ALLOW_ROOTS
+                        文件 API 路径白名单（逗号分隔的根目录；默认=监控目录；空字符串=拒绝所有）
   --ignore IGNORE       忽略的目录/文件名（逗号分隔，如 dist,build）
   --log-file LOG_FILE   日志文件路径
   --verbose             输出 DEBUG 级别日志
@@ -142,10 +151,57 @@ log_file: "~/.wxwatcher/wxwatcher.log"
 | `WXWATCHER_LOG_FILE` | 日志文件路径 | `~/.wxwatcher/logs/wxwatcher_<dirhash>.log` |
 | `WXWATCHER_IGNORE` | 额外忽略模式（逗号分隔） | 无 |
 | `WXWATCHER_EXT` | 仅监控扩展名（逗号分隔，含全部子目录） | 全部 |
+| `WXWATCHER_FILE_API_PORT` | 文件 API 端口（`0`=禁用） | `0` |
+| `WXWATCHER_FILE_API_ALLOW_ROOTS` | 文件 API 路径白名单（逗号分隔的根目录；空串=拒绝所有） | 监控目录 |
 | `WXWATCHER_KNOWLY_URL` | Knowly 上传 API 地址 | 不上传 |
 | `WXWATCHER_KNOWLY_USER` / `WXWATCHER_KNOWLY_PASS` | Knowly Basic Auth 凭证 | 无 |
 
 > `--dry-run` 模式下不推送，`WXWATCHER_PUSH_URL` / `PUSH_TOKEN` 可省略。
+
+## 文件 API（跨机文件访问）
+
+开启后，wxwatcher 会在后台线程暴露一个轻量 HTTP API，供 weclaw 等外部程序按需拉取本机文件——实现"从微信里取任意一台机器的文件"。
+
+```bash
+wxwatcher ~/ygs --file-api-port 9120 --push-url ... --push-token <token>
+```
+
+### 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/health` | 健康检查，返回 `{"status":"ok","hostname":"..."}` |
+| `GET` | `/api/file?path=<abs_path>` | 读取文件内容（上限 5MB，JSON 返回） |
+| `GET` | `/api/recent?dir=<dir>&ext=<ext>&minutes=<n>&limit=<n>` | 列出目录下最近修改的文件 |
+
+鉴权：请求头 `Authorization: Bearer <push_token>`（与推送 token 相同）。
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:9120/api/file?path=/Users/me/ygs/app.py"
+```
+
+### 路径沙箱（安全）
+
+> **v1.17.0 起强制启用。** 早期版本仅有 Bearer token 鉴权、无任何路径约束，一旦 token 泄漏即可被读取 `~/.ssh/id_rsa`、`/etc/shadow`、`~/.aws/credentials` 等核心凭证。
+
+请求路径会先经 `realpath` 规范化（解析符号链接，防止软链接绕过），然后：
+
+1. **必须落在白名单内**（`--file-api-allow-roots`，默认=监控目录）。白名单为空时**拒绝所有请求**（fail-closed）。
+2. **命中敏感规则一律拒绝**：目录 `.ssh` / `.gnupg` / `.aws` / `.kube` / `.docker` 等；文件名 `id_rsa` / `id_ed25519` / `.env` / `credentials` / `shadow` / `sudoers` 等；绝对路径前缀 `/etc`、`/proc`、`/sys`、`/dev`、`/boot`。
+
+命中拒绝时返回 `403` 并写 warning 日志。
+
+```bash
+# 只允许读取 ~/ygs 下的文件
+wxwatcher ~/ygs --file-api-port 9120 --file-api-allow-roots ~/ygs
+
+# 多个根目录（逗号分隔）
+wxwatcher ~/ygs --file-api-port 9120 --file-api-allow-roots "~/ygs,~/work"
+
+# 最高安全等级：显式空串 = 拒绝所有（API 形同关闭）
+wxwatcher ~/ygs --file-api-port 9120 --file-api-allow-roots ""
+```
 
 ### 忽略规则
 
