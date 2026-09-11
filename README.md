@@ -6,6 +6,9 @@
 
 文件变更监控工具：检测到变化时，通过微信推送通知。
 
+> 于无声处察微动，自掌心间知变迁。
+> In silence, watching the subtle; in your palm, knowing the tide of change.
+
 ## 特性
 
 - 两阶段扫描：先 `stat` 快速检测，仅对疑似变化文件计算 SHA256
@@ -64,6 +67,9 @@ usage: wxwatcher [-h] [-v] [-i INTERVAL] [--push-url PUSH_URL]
                  [dir]
 
 文件变更监控工具，检测到变化时通过微信推送通知
+
+于无声处察微动，自掌心间知变迁。
+In silence, watching the subtle; in your palm, knowing the tide of change.
 
 positional arguments:
   dir                   监控目录（默认当前目录）

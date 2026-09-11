@@ -36,7 +36,13 @@ def cap_changes(changes: list[str], max_total: int = 100):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wxwatcher",
-        description="文件变更监控工具，检测到变化时通过微信推送通知",
+        description=(
+            "文件变更监控工具，检测到变化时通过微信推送通知\n"
+            "\n"
+            "于无声处察微动，自掌心间知变迁。\n"
+            "In silence, watching the subtle; in your palm, knowing the tide of change."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("dir", nargs="?", default=None, help="监控目录（默认当前目录）")
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
