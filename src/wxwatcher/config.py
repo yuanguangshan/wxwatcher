@@ -81,6 +81,10 @@ class AppConfig:
     file_api_port: int = 0
     """文件 API 端口（0=禁用）"""
 
+    file_api_allow_roots: list = field(default_factory=list)
+    """文件 API 路径白名单（根目录列表）。为空时 file API 拒绝所有请求。
+    默认包含 watch_dir，避免开箱即用时 API 完全不可用。"""
+
 
 def _resolve(value, env_key: str, config_data: Optional[Dict[str, Any]], config_key: str, default):
     """Resolve a single config value with priority: CLI > env > config_file > default."""
@@ -303,4 +307,38 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
             "WXWATCHER_FILE_API_PORT",
             config_file_data, "file_api_port", 0,
         )),
+        file_api_allow_roots=_resolve_allow_roots(
+            getattr(args, "file_api_allow_roots", None) if hasattr(args, "file_api_allow_roots") else None,
+            config_file_data, watch_dir,
+        ),
     )
+
+
+def _resolve_allow_roots(cli_value, config_data: Optional[Dict[str, Any]], watch_dir: str) -> list:
+    """解析文件 API 路径白名单：CLI > env > config_file > 默认(watch_dir)。
+
+    默认回落到 watch_dir，保证开启 file_api_port 后开箱即用；
+    若显式配置为空字符串则视为「拒绝所有」，便于最高安全等级部署。
+    """
+    raw = cli_value
+    if raw is None:
+        raw = os.environ.get("WXWATCHER_FILE_API_ALLOW_ROOTS")
+    if raw is None and config_data:
+        raw = config_data.get("file_api_allow_roots")
+
+    if raw is None:
+        return [os.path.realpath(watch_dir)] if watch_dir else []
+
+    if isinstance(raw, (list, tuple)):
+        parts = [str(p).strip() for p in raw]
+    else:
+        # 逗号或 os.pathsep 分隔
+        text = str(raw)
+        for sep in (";", ","):
+            text = text.replace(sep, os.pathsep)
+        parts = [p.strip() for p in text.split(os.pathsep)]
+
+    parts = [p for p in parts if p]
+    if not parts:
+        return []  # 显式空 = fail-closed
+    return [os.path.realpath(os.path.expanduser(p)) for p in parts]

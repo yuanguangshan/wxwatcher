@@ -49,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-changes", type=int, default=None, help="单轮推送的最大变更条数，超出截断（默认 100）")
     parser.add_argument("--ext", default=None, help="仅监控指定扩展名（逗号分隔，如 py,md）")
     parser.add_argument("--file-api-port", type=int, default=None, help="文件 API 端口（0=禁用，如 9120）")
+    parser.add_argument("--file-api-allow-roots", default=None, help="文件 API 路径白名单（逗号分隔的根目录；默认=监控目录；空字符串=拒绝所有）")
     parser.add_argument("--ignore", default=None, help="忽略的目录/文件名（逗号分隔，如 dist,build）")
     parser.add_argument("--log-file", default=None, help="日志文件路径")
     parser.add_argument("--verbose", action="store_true", help="输出 DEBUG 级别日志")
@@ -362,10 +363,11 @@ def main():
     _install_signal_handlers()
     cfg, logger, state, watch_dir = _init_watcher(args, config_file_data)
 
-    # 启动文件 API（如果配置了端口）
+# 启动文件 API（如果配置了端口）
     file_api_port = cfg.file_api_port or 0
     if file_api_port > 0:
-        start_file_api(file_api_port, cfg.push_token, cfg.hostname)
+        start_file_api(file_api_port, cfg.push_token, cfg.hostname,
+                       allow_roots=cfg.file_api_allow_roots)
 
     try:
         _main_loop(state, cfg, logger, watch_dir, once=args.once)

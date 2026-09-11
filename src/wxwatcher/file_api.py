@@ -26,6 +26,71 @@ logger = logging.getLogger("wxwatcher.file_api")
 _token = ""
 _hostname = ""
 _server = None
+_allow_roots: list = []
+
+# 敏感路径黑名单：即使落在 allow_roots 内也一律拒绝。
+# 用规范化后的绝对路径做前缀/精确匹配。
+_DENY_DIRS = {
+    ".ssh", ".gnupg", ".aws", ".kube", ".docker", ".config/gcloud",
+    ".password-store", ".netrc", ".npmrc", ".pypirc", ".git-credentials",
+}
+_DENY_BASENAMES = {
+    ".netrc", ".npmrc", ".pypirc", ".git-credentials", "id_rsa", "id_ed25519",
+    "id_ecdsa", "id_dsa", "credentials", ".env", "shadow", "sudoers",
+}
+_DENY_ABS_PREFIXES = (
+    "/etc", "/var/root", "/private/etc", "/private/var/root",
+    "/proc", "/sys", "/dev", "/boot",
+)
+
+
+def _canonical(path: str) -> str:
+    """展开 ~、转绝对路径、解析符号链接，返回规范路径。"""
+    p = os.path.expanduser(path)
+    p = os.path.abspath(p)
+    # realpath 解析符号链接，防止用软链接绕过白名单
+    return os.path.realpath(p)
+
+
+def _is_within(path: str, root: str) -> bool:
+    """判断 path 是否位于 root 之内（含 root 本身）。"""
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:
+        # 不同盘符（Windows）等情况
+        return False
+
+
+def _check_path_allowed(path: str) -> tuple:
+    """校验路径是否被沙箱允许。
+
+    返回 (ok, canonical_path, error_message)。
+    规则：必须落在 allow_roots 之一内；且不得命中敏感目录/文件名。
+    allow_roots 为空时拒绝所有请求（fail-closed）。
+    """
+    canonical = _canonical(path)
+
+    if not _allow_roots:
+        return False, canonical, "file API 未配置 allow_roots，已拒绝所有访问（fail-closed）"
+
+    # 必须先确认在白名单内，再谈黑名单（避免泄漏黑名单本身的信息）
+    if not any(_is_within(canonical, r) for r in _allow_roots):
+        return False, canonical, f"path outside allowed roots: {canonical}"
+
+    # 敏感绝对路径前缀
+    for pref in _DENY_ABS_PREFIXES:
+        if canonical == pref or canonical.startswith(pref + os.sep):
+            return False, canonical, f"sensitive path denied: {canonical}"
+
+    # 敏感目录 / 文件名
+    parts = canonical.split(os.sep)
+    for part in parts:
+        if part in _DENY_DIRS:
+            return False, canonical, f"sensitive directory denied: {part}"
+    if os.path.basename(canonical) in _DENY_BASENAMES:
+        return False, canonical, f"sensitive file denied: {os.path.basename(canonical)}"
+
+    return True, canonical, ""
 
 
 class FileAPIHandler(BaseHTTPRequestHandler):
@@ -77,8 +142,13 @@ class FileAPIHandler(BaseHTTPRequestHandler):
             self._json_response(400, {"error": "path required"})
             return
 
-        path = os.path.expanduser(path)
-        path = os.path.abspath(path)
+        ok, canonical, err = _check_path_allowed(path)
+        if not ok:
+            logger.warning(f"file API denied: {err}")
+            self._json_response(403, {"error": err})
+            return
+
+        path = canonical
 
         if not os.path.exists(path):
             self._json_response(404, {"error": f"not found: {path}"})
@@ -119,8 +189,13 @@ class FileAPIHandler(BaseHTTPRequestHandler):
             self._json_response(400, {"error": "dir required"})
             return
 
-        directory = os.path.expanduser(directory)
-        directory = os.path.abspath(directory)
+        ok, canonical, err = _check_path_allowed(directory)
+        if not ok:
+            logger.warning(f"file API denied (recent): {err}")
+            self._json_response(403, {"error": err})
+            return
+
+        directory = canonical
 
         if not os.path.isdir(directory):
             self._json_response(404, {"error": f"not a directory: {directory}"})
@@ -160,11 +235,21 @@ class FileAPIHandler(BaseHTTPRequestHandler):
         self._json_response(200, {"files": results, "count": len(results)})
 
 
-def start_file_api(port: int, token: str, hostname: str):
-    """Start the file API server in a background daemon thread."""
-    global _token, _hostname, _server
+def start_file_api(port: int, token: str, hostname: str, allow_roots: list = None):
+    """Start the file API server in a background daemon thread.
+
+    allow_roots: 允许访问的根目录白名单（规范化后）。为空时 API 拒绝所有请求。
+    """
+    global _token, _hostname, _server, _allow_roots
     _token = token
     _hostname = hostname
+    _allow_roots = [os.path.realpath(os.path.expanduser(os.path.abspath(r)))
+                    for r in (allow_roots or []) if r]
+
+    if not _allow_roots:
+        logger.warning("file API 未配置 allow_roots：所有 /api/file 与 /api/recent 请求都会被拒绝")
+    else:
+        logger.info(f"file API allow_roots: {_allow_roots}")
 
     try:
         _server = HTTPServer(("0.0.0.0", port), FileAPIHandler)
