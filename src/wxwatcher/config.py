@@ -78,6 +78,9 @@ class AppConfig:
     knowly_pass: str = ""
     """Knowly Basic Auth 密码"""
 
+    file_api_port: int = 0
+    """文件 API 端口（0=禁用）"""
+
 
 def _resolve(value, env_key: str, config_data: Optional[Dict[str, Any]], config_key: str, default):
     """Resolve a single config value with priority: CLI > env > config_file > default."""
@@ -295,4 +298,9 @@ def load_config(args, config_file_data: Optional[Dict[str, Any]] = None) -> AppC
         knowly_upload_url=knowly_url,
         knowly_user=knowly_user,
         knowly_pass=knowly_pass,
+        file_api_port=int(_resolve(
+            getattr(args, "file_api_port", None) if hasattr(args, "file_api_port") else None,
+            "WXWATCHER_FILE_API_PORT",
+            config_file_data, "file_api_port", 0,
+        )),
     )
